@@ -23,6 +23,17 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
+      # Las versiones recientes de Xcode no traen preinstalada la plataforma iOS en los runners:
+      # sin ella, xcodebuild falla en segundos con "iOS XX is not installed" (exit 65).
+      - name: Preparar plataforma iOS
+        run: |
+          xcodebuild -version
+          if xcodebuild -project LidarScanner.xcodeproj -scheme LidarScanner -showdestinations 2>&1 | grep -qi "not installed"; then
+            echo "Descargando plataforma iOS…"
+            xcodebuild -downloadPlatform iOS
+          fi
+          xcodebuild -showsdks
+
       - name: Compilar (sin firma)
         run: |
           set -o pipefail
@@ -48,6 +59,15 @@ jobs:
         with:
           name: LidarScanner-ipa
           path: LidarScanner.ipa
+
+      # Muestra los errores como anotaciones en el resumen de la ejecución (visibles sin descargar el log).
+      - name: Resumir errores
+        if: failure()
+        run: |
+          [ -f xcodebuild.log ] || exit 0
+          grep -E "error:|BUILD FAILED|is not installed" xcodebuild.log | sort -u | head -40 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
 
       - uses: actions/upload-artifact@v4
         if: failure()
