@@ -54,7 +54,7 @@ private struct CaptureOverlay: View {
 
     var body: some View {
         VStack {
-            if let hint = session.feedback.compactMap(ObjectScanModel.message(for:)).first {
+            if let hint = session.feedback.compactMap({ ObjectScanModel.message(for: $0) }).first {
                 Text(hint)
                     .font(.callout.weight(.semibold))
                     .padding(.horizontal, 14).padding(.vertical, 8)

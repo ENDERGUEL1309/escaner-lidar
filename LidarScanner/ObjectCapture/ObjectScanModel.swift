@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import RealityKit
+import SwiftUI   // ObjectCaptureSession está en la superposición RealityKit + SwiftUI
 
 /// Flujo de escaneo de objetos con Object Capture (RealityKit):
 /// 1. `ObjectCaptureSession` guía la captura (usa LiDAR para delimitar el objeto y elegir las fotos).
