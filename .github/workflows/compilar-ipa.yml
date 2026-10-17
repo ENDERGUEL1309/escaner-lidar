@@ -1,0 +1,56 @@
+# Compila la app en un Mac en la nube de GitHub (sin firmar) y publica el .ipa como artefacto.
+# Después se firma e instala desde Windows con Sideloadly usando tu Apple ID.
+name: Compilar IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Generar proyecto Xcode
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Compilar (sin firma)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project LidarScanner.xcodeproj \
+            -scheme LidarScanner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee xcodebuild.log
+
+      - name: Empaquetar IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/LidarScanner.app Payload/
+          zip -qry LidarScanner.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LidarScanner-ipa
+          path: LidarScanner.ipa
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: log-compilacion
+          path: xcodebuild.log

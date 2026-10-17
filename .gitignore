@@ -1,0 +1,18 @@
+# Proyecto generado por XcodeGen (se crea con `xcodegen generate`)
+*.xcodeproj/
+LidarScanner/Info.plist
+
+# Compilación
+build/
+DerivedData/
+Payload/
+*.ipa
+xcodebuild.log
+
+# Xcode / macOS
+xcuserdata/
+*.xcuserstate
+.DS_Store
+
+# Claude Code (configuración local)
+.claude/

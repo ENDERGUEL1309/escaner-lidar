@@ -1,0 +1,41 @@
+name: LidarScanner
+options:
+  bundleIdPrefix: com.tuempresa
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Pon aquí tu Team ID de Apple Developer (o elígelo en Xcode > Signing & Capabilities)
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  LidarScanner:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - path: LidarScanner
+    info:
+      path: LidarScanner/Info.plist
+      properties:
+        CFBundleDisplayName: "Escáner LiDAR"
+        NSCameraUsageDescription: "La cámara y el sensor LiDAR se usan para escanear objetos y entornos en 3D."
+        UIRequiredDeviceCapabilities: [arkit]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tuempresa.lidarscanner
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
