@@ -6,7 +6,7 @@ App iOS nativa (Swift, SwiftUI, ARKit y RealityKit) que combina el **sensor LiDA
 
 | Modo | Para qué | Cómo funciona | Resultado |
 |---|---|---|---|
-| **Entorno** | Habitaciones, casas, exteriores, muebles, objetos grandes | Malla de reconstrucción LiDAR de ARKit + mapa de profundidad por píxel + color de la cámara. Al terminar, cada vértice se colorea proyectando las fotos clave sobre él, con prueba de oclusión. | `malla_color.ply`, `malla_color.obj`, `malla_color.usdz`, `nube_puntos.ply` |
+| **Entorno** | Habitaciones, casas, exteriores, muebles, objetos grandes | Fusión volumétrica (TSDF) de la profundidad LiDAR + color de la cámara, relleno de huecos y separación en objetos con la clasificación neuronal de ARKit. | Malla y nube de puntos a color (`.ply`, `.obj`, `.usdz`), escena separada por objetos y `escena.json` |
 | **Objeto** | Objetos pequeños y medianos, personas quietas | Object Capture de Apple: captura guiada (el LiDAR delimita el objeto) + fotogrametría en el propio iPhone. | `modelo.usdz` con textura fotorrealista (PBR) |
 
 El modo **Objeto** da el mejor resultado visual (textura de alta resolución). El modo **Entorno** cubre espacios grandes que la fotogrametría no puede manejar.
@@ -47,34 +47,60 @@ En Xcode:
 
 Con un Apple ID gratuito la app **caduca a los 7 días**: vuelve a instalarla con Sideloadly cuando pase. Con la cuenta de Apple Developer (99 USD/año) dura 1 año y puede distribuirse por TestFlight.
 
+## Cómo se procesa un escaneo de entorno
+
+```
+LiDAR (profundidad) ─┐
+Cámara (color) ──────┼─► Fusión TSDF ─► Relleno de huecos ─► Superficie ─► Color multivista ─► Exportar
+ARKit (pose) ────────┘                                         │
+ARKit (clasificación neuronal: pared, suelo, mesa…) ───────────┴─► Segmentación en objetos ─► Escena editable
+```
+
+1. **Fusión volumétrica TSDF:** el espacio se divide en vóxeles que guardan la distancia a la superficie, promediada sobre todas las lecturas LiDAR. El ruido se cancela, los objetos que se movieron desaparecen y no quedan capas duplicadas.
+2. **Relleno de huecos:** los vóxeles no observados que están rodeados de superficie toman el valor de sus vecinos. Así se cierran huecos de hasta unos 8 vóxeles. Solo prolonga superficies existentes; no inventa objetos.
+3. **Superficie (Surface Nets):** se extrae una malla continua y suave de la isosuperficie.
+4. **Color multivista:** cada vértice toma el color de las mejores fotos clave (frontales, cercanas y no tapadas).
+5. **Segmentación:** cada vértice recibe la clase que la red neuronal de ARKit asignó en el iPhone. Suelo, paredes, techo, puertas y ventanas forman grupos. El resto se separa en objetos por conectividad (al quitar suelo y paredes, cada mueble queda aislado) y se nombra por su clase mayoritaria ("Mesa 1", "Asiento 2", "Objeto 3"…), con su caja orientada y sus medidas.
+
+### Archivos de un escaneo de entorno
+
+| Archivo | Contenido |
+|---|---|
+| `malla_color.ply` / `.obj` / `.usdz` | Superficie completa con color |
+| `nube_puntos.ply` | Nube de puntos densa, sin ruido, con normales y color |
+| `escena_objetos.obj` / `.usdz` | La escena separada: cada objeto es una pieza independiente con nombre |
+| `escena.json` | Inventario: nombre, categoría, centro, medidas y giro de cada objeto |
+
+En Blender, importa `escena_objetos.obj` (o el `.usdz`). Cada mueble aparece como un objeto propio que puedes mover, borrar, duplicar o reemplazar.
+
 ## Estructura
 
 ```
 LidarScanner/
 ├── App/                     Entrada de la app y pantalla principal
 ├── Environment/             Modo Entorno
-│   ├── SceneScanner.swift       Sesión ARKit: integra profundidad + color y exporta
+│   ├── SceneScanner.swift       Sesión ARKit, integración por fotograma y post-proceso
+│   ├── TSDFVolume.swift         Fusión volumétrica, relleno de huecos y extracción (Surface Nets)
+│   ├── SceneSegmenter.swift     Clasificación ARKit por vértice y separación en objetos
 │   ├── CameraModel.swift        Proyección y desproyección pinhole (intrínsecos de ARKit)
 │   ├── ImageSampler.swift       YCbCr → RGB del fotograma de la cámara
-│   ├── PointCloudAccumulator    Fusión de la nube de puntos en vóxeles (promedia ruido y color)
-│   ├── KeyframeStore.swift      Selección de vistas bien repartidas para texturizar
-│   ├── MeshBuilder.swift        Une los ARMeshAnchor en una sola malla en coordenadas del mundo
+│   ├── KeyframeStore.swift      Selección de vistas bien repartidas para colorear
 │   ├── MeshColorizer.swift      Color por vértice multivista con prueba de oclusión LiDAR
+│   ├── MeshBuilder.swift        Malla de ARKit (respaldo si la fusión no tiene datos)
 │   └── SceneScanView.swift      Interfaz del escaneo
 ├── ObjectCapture/           Modo Objeto (ObjectCaptureSession + PhotogrammetrySession)
-└── Shared/                  Exportadores (PLY/OBJ/USDZ), almacenamiento, galería
+└── Shared/                  Exportadores (PLY/OBJ/USDZ/JSON), almacenamiento, galería
 ```
 
 ## Calidad (modo Entorno)
 
-| Calidad | Vóxel de la nube | Muestreo de profundidad | Uso |
+| Calidad | Vóxel | Distancia máxima | Uso |
 |---|---|---|---|
-| Rápido | 2 cm | 1 de cada 4 píxeles | Espacios grandes, vista previa |
-| Equilibrado | 1 cm | 1 de cada 2 | Uso general |
-| Preciso | 5 mm | todos | Muebles, detalle; consume más memoria |
+| Rápido | 2 cm | 4 m | Casas enteras, espacios grandes |
+| Equilibrado | 1,5 cm | 4 m | Habitaciones, uso general |
+| Preciso | 1 cm | 3 m | Muebles y detalle; consume más memoria |
 
-Solo se usan mediciones LiDAR de **confianza alta**, entre 0,15 m y 4 m.
-
+Las lecturas LiDAR de confianza alta pesan más; las de confianza media cuentan menos y las de confianza baja se descartan. Si aparece "Memoria del escaneo llena", finaliza o usa una calidad menor.
 ## Consejos para la máxima precisión
 
 - **Luz uniforme y abundante.** El color sale de la cámara: las sombras duras y los reflejos se quedan "pintados" en el modelo.
@@ -90,9 +116,22 @@ Solo se usan mediciones LiDAR de **confianza alta**, entre 0,15 m y 4 m.
 - **PLY/OBJ con color por vértice:** Blender (en *Material*, usa un nodo *Color Attribute*), MeshLab o CloudCompare.
 - Los archivos están en **Archivos › En mi iPhone › Escáner LiDAR › Escaneos**, y también se pueden compartir con AirDrop desde la app.
 
-## Limitaciones conocidas y siguientes pasos
+## Hoja de ruta de IA
 
-- En el modo Entorno el color es **por vértice**: la nitidez depende de la densidad de la malla de ARKit (unos 2–5 cm entre vértices). Para una textura más fina, el siguiente paso sería generar un **atlas UV de texturas** proyectando las fotos clave.
-- La nube de puntos se procesa en la CPU; un paso futuro es moverla a **Metal** y mostrarla a color en tiempo real.
-- No hay cierre de bucle ni alineamiento ICP propio: se confía en el seguimiento de ARKit, que es muy bueno en espacios del tamaño de una casa.
-- La exportación a USDZ del modo Entorno usa SceneKit; si un visor no muestra el color de los vértices, usa el PLY u OBJ.
+Lo que ya funciona en el iPhone usa la red neuronal de clasificación de escena de ARKit. Los siguientes pasos necesitan modelos más grandes en un **servidor con GPU**. Railway puede alojar la web y la API, pero no tiene GPU, así que la parte de IA iría en un proveedor como RunPod o Modal.
+
+| Paso | Qué haría | Técnica |
+|---|---|---|
+| Segmentación de vocabulario abierto | Reconocer cualquier objeto ("lámpara", "planta", "monitor"), no solo mesa/asiento | Máscaras 2D con SAM sobre las fotos clave, proyectadas y votadas en 3D (estilo OpenMask3D / SAM3D) |
+| Separar objetos que se tocan | Distinguir un portátil sobre una mesa, sillas juntas | Segmentación de instancias 3D (Mask3D) |
+| Completar geometría oculta | Reconstruir la parte trasera o inferior de los muebles | Completado de formas aprendido, marcado como "inferido" para no confundirlo con lo medido |
+| Sustituir por modelos limpios | Cambiar un objeto escaneado por un modelo 3D equivalente y editable | Búsqueda por forma y categoría en bibliotecas de modelos |
+| Editor web | Mover, borrar y reemplazar objetos desde Safari | Visor three.js alojado en Railway, que lee `escena.json` |
+
+## Limitaciones conocidas
+
+- La detección distingue las clases que reconoce ARKit (pared, suelo, techo, puerta, ventana, mesa, asiento). Lo demás aparece como "Objeto N".
+- Los objetos que se tocan entre sí (por ejemplo, algo apoyado en una mesa) salen como un solo objeto.
+- El relleno de huecos cierra huecos pequeños; las zonas grandes sin escanear siguen abiertas.
+- No hay cierre de bucle propio: se confía en el seguimiento de ARKit, que es muy bueno en espacios del tamaño de una casa.
+- La exportación a USDZ usa SceneKit; si un visor no muestra el color de los vértices, usa el PLY u OBJ.
