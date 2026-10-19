@@ -5,10 +5,33 @@ import QuickLook
 struct ExportedFilesView: View {
     let title: String
     let files: [URL]
+    var objects: [SceneObjectInfo] = []
     @State private var preview: URL?
 
     var body: some View {
         List {
+            if !objects.isEmpty {
+                Section {
+                    ForEach(objects) { object in
+                        HStack(spacing: 12) {
+                            Image(systemName: icon(for: object))
+                                .foregroundStyle(object.estructura ? Color.secondary : Color.orange)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(object.nombre).font(.body.weight(.medium))
+                                Text(object.dimensionsText)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Objetos detectados")
+                } footer: {
+                    Text("Cada uno es un objeto independiente en escena_objetos.obj / .usdz: en Blender puedes moverlo, borrarlo o editarlo por separado.")
+                }
+            }
+
             Section {
                 ForEach(files, id: \.self) { url in
                     HStack(spacing: 12) {
@@ -44,10 +67,24 @@ struct ExportedFilesView: View {
         .quickLookPreview($preview)
     }
 
+    private func icon(for object: SceneObjectInfo) -> String {
+        switch object.categoria {
+        case "suelo": "square.bottomhalf.filled"
+        case "pared": "square.split.1x2"
+        case "techo": "square.tophalf.filled"
+        case "puerta": "door.left.hand.closed"
+        case "ventana": "window.vertical.closed"
+        case "mesa": "table.furniture"
+        case "asiento": "chair.lounge"
+        default: "cube"
+        }
+    }
+
     private func icon(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
         case "usdz": "cube.fill"
         case "obj": "cube.transparent"
+        case "json": "list.bullet.rectangle"
         case "ply": url.lastPathComponent.contains("nube") ? "circle.grid.3x3.fill" : "square.grid.3x3.square"
         default: "doc"
         }
@@ -56,7 +93,8 @@ struct ExportedFilesView: View {
     private func description(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
         case "usdz": "Vista 3D / AR en iPhone"
-        case "obj": "Malla con color (Blender, ZBrush…)"
+        case "obj": url.lastPathComponent.contains("objetos") ? "Escena separada por objetos" : "Malla con color (Blender, ZBrush…)"
+        case "json": "Inventario de objetos y medidas"
         case "ply": url.lastPathComponent.contains("nube") ? "Nube de puntos a color" : "Malla con color y normales"
         default: "Archivo"
         }
@@ -70,7 +108,9 @@ struct ScansListView: View {
         List {
             ForEach(folders, id: \.self) { folder in
                 NavigationLink {
-                    ExportedFilesView(title: folder.lastPathComponent, files: ScanStorage.files(in: folder))
+                    ExportedFilesView(title: folder.lastPathComponent,
+                                      files: ScanStorage.files(in: folder),
+                                      objects: ScanStorage.sceneObjects(in: folder))
                 } label: {
                     Label(folder.lastPathComponent.replacingOccurrences(of: "_", with: " "),
                           systemImage: folder.lastPathComponent.hasPrefix("Objeto") ? "cube.fill" : "house.fill")

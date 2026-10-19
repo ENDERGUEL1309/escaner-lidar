@@ -36,6 +36,14 @@ enum ScanStorage {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Objetos de `escena.json`, si el escaneo se procesó con detección de objetos.
+    static func sceneObjects(in folder: URL) -> [SceneObjectInfo] {
+        let url = folder.appendingPathComponent("escena.json")
+        guard let data = try? Data(contentsOf: url),
+              let scene = try? JSONDecoder().decode(SceneDescription.self, from: data) else { return [] }
+        return scene.objetos
+    }
+
     static func fileSizeText(_ url: URL) -> String {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)

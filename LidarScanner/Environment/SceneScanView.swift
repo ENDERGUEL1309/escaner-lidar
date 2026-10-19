@@ -19,6 +19,13 @@ struct SceneScanView: View {
                         .background(.yellow.opacity(0.9), in: Capsule())
                         .foregroundStyle(.black)
                 }
+                if scanner.isVolumeFull {
+                    Text("Memoria del escaneo llena: finaliza o usa una calidad menor")
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.orange.opacity(0.9), in: Capsule())
+                        .foregroundStyle(.black)
+                }
                 Spacer()
                 controls
             }
@@ -33,7 +40,7 @@ struct SceneScanView: View {
         .onDisappear { scanner.stop() }
         .sheet(isPresented: finishedBinding) {
             NavigationStack {
-                ExportedFilesView(title: "Escaneo guardado", files: scanner.exportedFiles)
+                ExportedFilesView(title: "Escaneo guardado", files: scanner.exportedFiles, objects: scanner.detectedObjects)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Nuevo escaneo") { scanner.prepareNewScan() }
@@ -60,7 +67,7 @@ struct SceneScanView: View {
 
     private var statsBar: some View {
         HStack(spacing: 16) {
-            stat("Puntos", scanner.pointCount.formatted(.number.notation(.compactName)), "circle.grid.3x3.fill")
+            stat("Vóxeles", scanner.voxelCount.formatted(.number.notation(.compactName)), "cube.fill")
             stat("Malla", "\(scanner.meshAnchorCount)", "square.grid.3x3.square")
             stat("Vistas", "\(scanner.keyframeCount)", "camera.fill")
         }
@@ -84,6 +91,14 @@ struct SceneScanView: View {
                     ForEach(ScanSettings.Quality.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                VStack(spacing: 4) {
+                    Toggle("Rellenar huecos", isOn: $scanner.settings.fillHoles)
+                    Toggle("Detectar objetos", isOn: $scanner.settings.detectObjects)
+                }
+                .font(.subheadline)
+                .tint(.cyan)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 Text("Recorre la zona despacio, a 0,5–3 m, apuntando a todas las superficies.")
                     .font(.footnote)
                     .multilineTextAlignment(.center)
