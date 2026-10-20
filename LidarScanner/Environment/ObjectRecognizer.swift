@@ -15,13 +15,15 @@ enum ObjectRecognizer {
         let confidence: Float
     }
 
+    /// Analiza las 3 fotos donde mejor se ve el objeto y suma la confianza de cada etiqueta:
+    /// una sola foto puede engañar (reflejos, ángulo raro); tres vistas coinciden mucho más.
     static func recognize(_ mesh: ColoredMesh, keyframes: [Keyframe]) -> Result? {
         guard !mesh.positions.isEmpty, !keyframes.isEmpty else { return nil }
         let step = max(1, mesh.positions.count / 1500)
         let samples = stride(from: 0, to: mesh.positions.count, by: step).map { mesh.positions[$0] }
 
-        // 1. Mejor vista.
-        var best: (keyframe: Keyframe, rect: CGRect, score: Float)?
+        // 1. Vistas candidatas: casi todo el objeto visible y sin oclusiones; mejor cuanto más grande se vea.
+        var candidates: [(keyframe: Keyframe, rect: CGRect, score: Float)] = []
         for kf in keyframes {
             let w = Float(kf.image.width), h = Float(kf.image.height)
             var minP = SIMD2<Float>(w, h), maxP = SIMD2<Float>(0, 0)
@@ -37,35 +39,40 @@ enum ObjectRecognizer {
             let fraction = Float(visible) / Float(samples.count)
             guard fraction > 0.6 else { continue }
             let size = maxP - minP
-            let score = fraction * size.x * size.y
-            if score > (best?.score ?? 0) {
-                best = (kf, CGRect(x: CGFloat(minP.x), y: CGFloat(minP.y), width: CGFloat(size.x), height: CGFloat(size.y)), score)
+            candidates.append((kf, CGRect(x: CGFloat(minP.x), y: CGFloat(minP.y),
+                                          width: CGFloat(size.x), height: CGFloat(size.y)),
+                               fraction * size.x * size.y))
+        }
+        let best = candidates.sorted { $0.score > $1.score }.prefix(3)
+        guard !best.isEmpty else { return nil }
+
+        // 2. Clasificación de cada recorte (con margen: el contexto ayuda) y suma de confianzas.
+        var totals: [String: Float] = [:]
+        var analysed = 0
+        for candidate in best {
+            let image = candidate.keyframe.image
+            let rect = candidate.rect.insetBy(dx: -candidate.rect.width * 0.15, dy: -candidate.rect.height * 0.15)
+                .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+                .integral
+            guard rect.width >= 24, rect.height >= 24, let crop = cgImage(from: image, rect: rect) else { continue }
+
+            // Las fotos de ARKit están en la orientación del sensor (apaisada): con el iPhone en vertical hay que girarlas 90°.
+            let request = VNClassifyImageRequest()
+            let handler = VNImageRequestHandler(cgImage: crop, orientation: .right)
+            guard (try? handler.perform([request])) != nil, let observations = request.results else { continue }
+            analysed += 1
+            for observation in observations.prefix(25) where observation.confidence >= 0.05 {
+                guard !ignored.contains(observation.identifier) else { continue }
+                totals[observation.identifier, default: 0] += observation.confidence
             }
         }
-        guard let best else { return nil }
-
-        // 2. Recorte con margen (el contexto ayuda a la clasificación).
-        let image = best.keyframe.image
-        let rect = best.rect.insetBy(dx: -best.rect.width * 0.15, dy: -best.rect.height * 0.15)
-            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            .integral
-        guard rect.width >= 24, rect.height >= 24, let crop = cgImage(from: image, rect: rect) else { return nil }
-
-        // 3. Clasificación. Las fotos de ARKit están en la orientación del sensor (apaisada):
-        //    con el iPhone en vertical hay que girarlas 90°.
-        let request = VNClassifyImageRequest()
-        let handler = VNImageRequestHandler(cgImage: crop, orientation: .right)
-        guard (try? handler.perform([request])) != nil, let observations = request.results else { return nil }
-
-        for observation in observations.prefix(20) where observation.confidence >= 0.12 {
-            let id = observation.identifier
-            guard !ignored.contains(id) else { continue }
-            return Result(label: spanishName(for: id), confidence: observation.confidence)
-        }
-        return nil
+        guard analysed > 0, let winner = totals.max(by: { $0.value < $1.value }) else { return nil }
+        let confidence = winner.value / Float(analysed)
+        guard confidence >= 0.12 else { return nil }
+        return Result(label: spanishName(for: winner.key), confidence: min(1, confidence))
     }
 
-    private static func cgImage(from image: RGBImage, rect: CGRect) -> CGImage? {
+    static func cgImage(from image: RGBImage, rect: CGRect) -> CGImage? {
         let x0 = Int(rect.minX), y0 = Int(rect.minY), w = Int(rect.width), h = Int(rect.height)
         var bytes = [UInt8](repeating: 0, count: w * h * 3)
         for y in 0..<h {

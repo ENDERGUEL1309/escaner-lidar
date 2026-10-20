@@ -155,7 +155,9 @@ enum TextureBaker {
         var chartView: [Int] = []
         var chartMin: [SIMD2<Float>] = []
         var chartMax: [SIMD2<Float>] = []
+        var trianglesByView = [[Int]](repeating: [], count: views.count)
         for t in 0..<triCount where labels[t] >= 0 {
+            trianglesByView[Int(labels[t])].append(t)
             let root = find(Int32(t))
             let chart: Int32
             if let existing = chartIndexByRoot[root] {
@@ -241,6 +243,24 @@ enum TextureBaker {
         let pad = padding
         for (k, charts) in chartsByView.enumerated() where !charts.isEmpty {
             guard let url = views[k].fullImageURL, let photo = decodeRGBA(url) else { continue }
+
+            // Igualado de exposición: la cámara ajusta la exposición foto a foto y eso crea costuras de color.
+            // Se compara la foto con el color de consenso de la malla (mezcla de todas las vistas) en sus
+            // propios triángulos y se corrige con una ganancia por canal.
+            var reference = SIMD3<Float>(repeating: 0), observed = SIMD3<Float>(repeating: 0)
+            let own = trianglesByView[k]
+            let sampleStep = max(1, own.count / 1500)
+            for i in stride(from: 0, to: own.count, by: sampleStep) {
+                let t = own[i]
+                for c in 0..<3 {
+                    let color = mesh.colors[Int(indices[t * 3 + c])]
+                    reference += SIMD3<Float>(Float(color.x), Float(color.y), Float(color.z))
+                    observed += photo.sample(cornerUV[t * 3 + c].x, cornerUV[t * 3 + c].y)
+                }
+            }
+            let gain = simd_clamp(reference / simd_max(observed, SIMD3(repeating: 1)),
+                                  SIMD3(repeating: 0.7), SIMD3(repeating: 1.4))
+
             atlas.withUnsafeMutableBufferPointer { out in
                 DispatchQueue.concurrentPerform(iterations: charts.count) { i in
                     let c = charts[i]
@@ -255,7 +275,7 @@ enum TextureBaker {
                             guard ax >= 0, ax < S else { continue }
                             let su = src.x + (Float(x) + 0.5) / scale
                             let sv = src.y + (Float(y) + 0.5) / scale
-                            let color = photo.sample(su, sv)
+                            let color = rgb8(photo.sample(su, sv) * gain)
                             let o = (ay * S + ax) * 3
                             out[o] = color.x; out[o + 1] = color.y; out[o + 2] = color.z
                         }
@@ -330,7 +350,7 @@ enum TextureBaker {
 
         /// Muestreo bilineal (coordenadas en píxeles, se recortan al borde).
         @inline(__always)
-        func sample(_ u: Float, _ v: Float) -> SIMD3<UInt8> {
+        func sample(_ u: Float, _ v: Float) -> SIMD3<Float> {
             let x = max(0, min(Float(width) - 1.001, u - 0.5))
             let y = max(0, min(Float(height) - 1.001, v - 0.5))
             let x0 = Int(x), y0 = Int(y)
@@ -341,7 +361,7 @@ enum TextureBaker {
             }
             let top = px(x0, y0) * (1 - fx) + px(x0 + 1, y0) * fx
             let bottom = px(x0, y0 + 1) * (1 - fx) + px(x0 + 1, y0 + 1) * fx
-            return rgb8(top * (1 - fy) + bottom * fy)
+            return top * (1 - fy) + bottom * fy
         }
     }
 

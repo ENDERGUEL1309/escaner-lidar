@@ -159,10 +159,9 @@ struct SceneDescription: Codable {
 ///  3. El resto se separa en objetos por conectividad: al quitar suelo y paredes, cada mueble queda aislado.
 ///  4. Cada objeto se nombra por la clase mayoritaria de sus vértices.
 enum SceneSegmenter {
-    static func segment(_ mesh: ColoredMesh, classifier: SurfaceClassifier, minObjectVertices: Int = 300) -> [SceneSegment] {
+    /// Clase de ARKit de cada vértice de la malla.
+    static func labels(for mesh: ColoredMesh, classifier: SurfaceClassifier) -> [SurfaceLabel] {
         let n = mesh.positions.count
-        guard n > 0 else { return [] }
-
         var labels = [SurfaceLabel](repeating: .none, count: n)
         let positions = mesh.positions
         let chunkSize = 4096
@@ -173,6 +172,15 @@ enum SceneSegmenter {
                 }
             }
         }
+        return labels
+    }
+
+    /// `signatures`: separación de instancias de la IA de visión; si se pasa, los vértices que la IA ve
+    /// como objetos distintos no se unen aunque estén pegados.
+    static func segment(_ mesh: ColoredMesh, labels: [SurfaceLabel], signatures: InstanceSignatures? = nil,
+                        minObjectVertices: Int = 300) -> [SceneSegment] {
+        let n = mesh.positions.count
+        guard n > 0, labels.count == n else { return [] }
 
         // Componentes conexas (union-find) de los vértices que no son estructura.
         var parent = (0..<n).map { Int32($0) }
@@ -186,6 +194,7 @@ enum SceneSegmenter {
         }
         func union(_ a: UInt32, _ b: UInt32) {
             guard !labels[Int(a)].isStructure, !labels[Int(b)].isStructure else { return }
+            if let signatures, signatures.separates(Int(a), Int(b)) { return }
             let ra = find(Int32(a)), rb = find(Int32(b))
             if ra != rb { parent[Int(ra)] = rb }
         }

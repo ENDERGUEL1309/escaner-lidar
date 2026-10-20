@@ -386,14 +386,23 @@ final class SceneScanner: NSObject, ARSessionDelegate {
             mesh = MeshBuilder.build(from: meshAnchors)
         }
 
-        report("Eliminando ruido", 0.12)
+        report("Eliminando ruido", 0.1)
         MeshCleaner.removeSmallComponents(&mesh, minTriangles: 300)
         MeshCleaner.smooth(&mesh, iterations: 4)
-        MeshCleaner.recomputeNormals(&mesh)
         guard !mesh.isEmpty else {
             try? FileManager.default.removeItem(at: folder)
             throw ScanError.nothingCaptured
         }
+
+        // Pulido con la clasificación neuronal de ARKit: suelo, techo y paredes a planos perfectos.
+        report("Enderezando paredes y suelo", 0.12)
+        let classifier = SurfaceClassifier(anchors: meshAnchors)
+        var labels: [SurfaceLabel] = []
+        if !classifier.isEmpty {
+            labels = SceneSegmenter.labels(for: mesh, classifier: classifier)
+            MeshCleaner.flattenStructures(&mesh, labels: labels)
+        }
+        MeshCleaner.recomputeNormals(&mesh)
 
         report("Coloreando con \(keyframes.count) fotos", 0.15)
         MeshColorizer.colorize(&mesh, keyframes: keyframes.frames) { [weak self] p in
@@ -433,10 +442,13 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         }
 
         if settings.detectObjects {
-            report("Detectando objetos", 0.8)
-            let classifier = SurfaceClassifier(anchors: meshAnchors)
-            if !classifier.isEmpty {
-                var segments = SceneSegmenter.segment(mesh, classifier: classifier)
+            if !labels.isEmpty {
+                // IA de visión: separa en las fotos los objetos que se tocan entre sí.
+                report("Separando objetos con IA", 0.78)
+                let signatures = InstanceSignatures.compute(mesh: mesh, include: labels.map { !$0.isStructure },
+                                                            keyframes: keyframes.frames)
+                report("Detectando objetos", 0.82)
+                var segments = SceneSegmenter.segment(mesh, labels: labels, signatures: signatures)
 
                 // IA de visión: identifica cada objeto en la foto clave donde mejor se ve y lo renombra.
                 report("Identificando objetos con IA", 0.84)
