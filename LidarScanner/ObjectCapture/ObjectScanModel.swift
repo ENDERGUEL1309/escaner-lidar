@@ -19,6 +19,8 @@ final class ObjectScanModel {
 
     var phase: Phase = .idle
     var session: ObjectCaptureSession?
+    /// Modo área: captura una zona (rincón, mesa con objetos, fachada…) sin caja delimitadora.
+    var isAreaMode = false
 
     @ObservationIgnored private var folder: URL?
     @ObservationIgnored private var stateTask: Task<Void, Never>?
@@ -67,6 +69,11 @@ final class ObjectScanModel {
         }
     }
 
+    func startAreaCapture() {
+        isAreaMode = true
+        session?.startCapturing()
+    }
+
     func cancel() {
         stateTask?.cancel()
         reconstructionTask?.cancel()
@@ -80,6 +87,7 @@ final class ObjectScanModel {
         guard let folder, let images = imagesFolder, let checkpoints = checkpointFolder else { return }
         phase = .reconstructing(0)
 
+        let maskObject = !isAreaMode
         reconstructionTask = Task { [weak self] in
             let output = folder.appendingPathComponent("modelo.usdz")
             do {
@@ -89,6 +97,8 @@ final class ObjectScanModel {
                 }
                 var config = PhotogrammetrySession.Configuration()
                 config.checkpointDirectory = checkpoints
+                // En modo área no hay un objeto que recortar del fondo: se reconstruye todo lo fotografiado.
+                config.isObjectMaskingEnabled = maskObject
                 let photogrammetry = try PhotogrammetrySession(input: images, configuration: config)
                 try photogrammetry.process(requests: [.modelFile(url: output)])
 

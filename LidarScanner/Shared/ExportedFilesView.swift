@@ -8,8 +8,30 @@ struct ExportedFilesView: View {
     var objects: [SceneObjectInfo] = []
     @State private var preview: URL?
 
+    /// Carpeta del escaneo, si contiene una malla con color que se pueda abrir en el visor.
+    private var viewerFolder: URL? {
+        guard let folder = files.first?.deletingLastPathComponent() else { return nil }
+        let mesh = folder.appendingPathComponent("malla_color.ply")
+        return FileManager.default.fileExists(atPath: mesh.path) ? folder : nil
+    }
+
     var body: some View {
         List {
+            if let viewerFolder {
+                Section {
+                    NavigationLink {
+                        SceneViewerView(folder: viewerFolder)
+                    } label: {
+                        Label("Ver en 3D a color", systemImage: "rotate.3d")
+                            .font(.headline)
+                            .foregroundStyle(.cyan)
+                            .padding(.vertical, 6)
+                    }
+                } footer: {
+                    Text("Toca cada objeto para seleccionarlo, aislarlo, ocultarlo o exportarlo por separado.")
+                }
+            }
+
             if !objects.isEmpty {
                 Section {
                     ForEach(objects) { object in
@@ -19,7 +41,7 @@ struct ExportedFilesView: View {
                                 .frame(width: 28)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(object.nombre).font(.body.weight(.medium))
-                                Text(object.dimensionsText)
+                                Text(object.detailText)
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
@@ -92,7 +114,7 @@ struct ExportedFilesView: View {
 
     private func description(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
-        case "usdz": "Vista 3D / AR en iPhone"
+        case "usdz": url.lastPathComponent.hasPrefix("modelo") ? "Modelo con textura · 3D / AR" : "Geometría para AR (sin color: usa «Ver en 3D a color»)"
         case "obj": url.lastPathComponent.contains("objetos") ? "Escena separada por objetos" : "Malla con color (Blender, ZBrush…)"
         case "json": "Inventario de objetos y medidas"
         case "ply": url.lastPathComponent.contains("nube") ? "Nube de puntos a color" : "Malla con color y normales"

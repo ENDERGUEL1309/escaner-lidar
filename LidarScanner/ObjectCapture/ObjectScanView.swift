@@ -17,7 +17,7 @@ struct ObjectScanView: View {
                 if let session = model.session {
                     ObjectCaptureView(session: session)
                         .ignoresSafeArea()
-                    CaptureOverlay(session: session)
+                    CaptureOverlay(session: session, onAreaCapture: model.startAreaCapture)
                 }
 
             case .reconstructing(let fraction):
@@ -51,6 +51,7 @@ struct ObjectScanView: View {
 /// Controles sobre `ObjectCaptureView` según el estado de la sesión.
 private struct CaptureOverlay: View {
     let session: ObjectCaptureSession
+    let onAreaCapture: () -> Void
 
     var body: some View {
         VStack {
@@ -78,8 +79,9 @@ private struct CaptureOverlay: View {
     private var controls: some View {
         switch session.state {
         case .ready:
-            instruction("Apunta al objeto, colocado sobre una superficie despejada")
+            instruction("Objeto: apúntalo sobre una superficie despejada · Área: un rincón o zona completa")
             PrimaryButton("Detectar objeto", systemImage: "viewfinder") { _ = session.startDetecting() }
+            SecondaryButton("Capturar área (sin caja)", systemImage: "square.dashed") { onAreaCapture() }
 
         case .detecting:
             instruction("Ajusta la caja para que envuelva el objeto")

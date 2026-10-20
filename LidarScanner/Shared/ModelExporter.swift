@@ -136,7 +136,7 @@ enum ModelExporter {
         }
     }
 
-    private static func makeGeometry(_ mesh: ColoredMesh) -> SCNGeometry {
+    static func makeGeometry(_ mesh: ColoredMesh) -> SCNGeometry {
         let vertexSource = SCNGeometrySource(vertices: mesh.positions.map { SCNVector3($0.x, $0.y, $0.z) })
         let normalSource = SCNGeometrySource(normals: mesh.normals.map { SCNVector3($0.x, $0.y, $0.z) })
 

@@ -271,7 +271,28 @@ final class SceneScanner: NSObject, ARSessionDelegate {
             report("Detectando objetos", 0.78)
             let classifier = SurfaceClassifier(anchors: meshAnchors)
             if !classifier.isEmpty {
-                let segments = SceneSegmenter.segment(mesh, classifier: classifier)
+                var segments = SceneSegmenter.segment(mesh, classifier: classifier)
+
+                // IA de visión: identifica cada objeto en la foto clave donde mejor se ve y lo renombra.
+                report("Identificando objetos con IA", 0.82)
+                var recognitions: [Int: ObjectRecognizer.Result] = [:]
+                var counters: [String: Int] = [:]
+                for i in segments.indices where segments[i].kind == .object {
+                    let result = ObjectRecognizer.recognize(segments[i].mesh, keyframes: keyframes.frames)
+                    recognitions[i] = result
+                    let base = result?.label ?? segments[i].label.displayName
+                    counters[base, default: 0] += 1
+                    segments[i].name = "\(base) \(counters[base]!)"
+                }
+
+                // Cada parte también como PLY propio, para el visor y para editarla por separado.
+                let objectsFolder = folder.appendingPathComponent("objetos", isDirectory: true)
+                try FileManager.default.createDirectory(at: objectsFolder, withIntermediateDirectories: true)
+                for segment in segments {
+                    let url = objectsFolder.appendingPathComponent("\(ModelExporter.objectName(segment.name)).ply")
+                    try ModelExporter.writePLY(mesh: segment.mesh, to: url)
+                }
+
                 let parts = segments.map { ModelExporter.Part(name: $0.name, mesh: $0.mesh) }
 
                 report("Exportando escena por objetos", 0.88)
@@ -282,7 +303,11 @@ final class SceneScanner: NSObject, ARSessionDelegate {
                 let segmentedUSDZ = folder.appendingPathComponent("escena_objetos.usdz")
                 if (try? ModelExporter.writeUSDZ(parts: parts, to: segmentedUSDZ)) != nil { files.append(segmentedUSDZ) }
 
-                objects = segments.map { SceneSegmenter.info(for: $0, file: ModelExporter.objectName($0.name)) }
+                objects = segments.enumerated().map { i, segment in
+                    SceneSegmenter.info(for: segment,
+                                        file: "objetos/\(ModelExporter.objectName(segment.name)).ply",
+                                        recognition: recognitions[i])
+                }
                 let json = folder.appendingPathComponent("escena.json")
                 try ModelExporter.writeJSON(SceneDescription(objetos: objects), to: json)
                 files.append(json)

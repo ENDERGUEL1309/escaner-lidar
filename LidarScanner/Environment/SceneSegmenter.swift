@@ -108,7 +108,7 @@ struct SurfaceClassifier {
 
 struct SceneSegment {
     enum Kind { case structure, object, fragments }
-    let name: String
+    var name: String
     let label: SurfaceLabel
     let kind: Kind
     let mesh: ColoredMesh
@@ -128,10 +128,19 @@ struct SceneObjectInfo: Codable, Hashable, Identifiable {
     let rotacionY: Float
     let vertices: Int
     let triangulos: Int
+    /// Ruta relativa a la carpeta del escaneo del PLY de este objeto (p. ej. "objetos/Silla_1.ply").
     let archivo: String
+    /// Lo que la IA de visión reconoció en las fotos (nil si no estaba segura).
+    var etiquetaIA: String? = nil
+    var confianzaIA: Float? = nil
 
     var dimensionsText: String {
         dimensiones.map { $0.formatted(.number.precision(.fractionLength(2))) }.joined(separator: " × ") + " m"
+    }
+
+    var detailText: String {
+        guard let confianzaIA else { return dimensionsText }
+        return "\(dimensionsText) · IA \(Int(confianzaIA * 100)) %"
     }
 }
 
@@ -272,7 +281,7 @@ enum SceneSegmenter {
     }
 
     /// Caja orientada (giro solo en el eje vertical, como los muebles) para medir cada objeto.
-    static func info(for segment: SceneSegment, file: String) -> SceneObjectInfo {
+    static func info(for segment: SceneSegment, file: String, recognition: ObjectRecognizer.Result? = nil) -> SceneObjectInfo {
         let points = segment.mesh.positions
         var mean = SIMD3<Float>(repeating: 0)
         for p in points { mean += p }
@@ -308,6 +317,8 @@ enum SceneSegmenter {
                                rotacionY: angle * 180 / .pi,
                                vertices: segment.mesh.positions.count,
                                triangulos: segment.mesh.triangleCount,
-                               archivo: file)
+                               archivo: file,
+                               etiquetaIA: recognition?.label,
+                               confianzaIA: recognition?.confidence)
     }
 }
