@@ -283,7 +283,7 @@ final class TSDFVolume {
     /// exactamente esto (la mínima es 0,4 × 0,15 = 0,06).
     static let filledWeight: Float16 = 0.05
 
-    private static let faceOffsets =[(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+    private static let faceOffsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
 
     @inline(__always)
     private static func key(_ b: SIMD3<Int32>) -> Int64 {
