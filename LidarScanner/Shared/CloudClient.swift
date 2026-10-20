@@ -163,6 +163,11 @@ struct CloudClient {
         try decode(try await request("GET", "/api/escaneos/\(id)"))
     }
 
+    /// Borra el escaneo y todos sus archivos del servidor (libera su disco).
+    func delete(_ id: String) async throws {
+        _ = try await request("DELETE", "/api/escaneos/\(id)")
+    }
+
     /// Descarga todos los resultados en `destination` (se vacía antes).
     func download(_ scan: RemoteScan, to destination: URL) async throws {
         try? FileManager.default.removeItem(at: destination)

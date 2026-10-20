@@ -154,6 +154,7 @@ final class CloudEnhancement {
                 scan = try await client.status(id)
             }
             guard scan.estado == "listo" else {
+                try? await client.delete(id)   // un trabajo fallido tampoco debe ocupar el disco del servidor
                 throw CloudClient.CloudError.server(scan.error ?? "El procesado terminó en «\(scan.estado)»")
             }
 
@@ -161,6 +162,8 @@ final class CloudEnhancement {
             try await client.download(scan, to: resultsFolder)
             job?.descargado = true
             save()
+            // Ya está todo en el iPhone: se borra del servidor para dejar su disco libre para el siguiente escaneo.
+            try? await client.delete(id)
             phase = .ready
         } catch is CancellationError {
             // Se salió de la pantalla: el trabajo sigue en el servidor y se retoma al volver.
