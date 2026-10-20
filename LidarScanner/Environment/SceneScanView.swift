@@ -19,6 +19,12 @@ struct SceneScanView: View {
                         .background(.yellow.opacity(0.9), in: Capsule())
                         .foregroundStyle(.black)
                 }
+                if scanner.isTooFast && scanner.phase == .scanning {
+                    banner("Muy rápido: no se registra. Ve más despacio", color: .orange)
+                }
+                if scanner.phase == .moving {
+                    banner("En pausa mientras caminas. Apunta a la habitación para no perder la posición", color: .cyan)
+                }
                 if scanner.isVolumeFull {
                     Text("Memoria del escaneo llena: finaliza o usa una calidad menor")
                         .font(.callout.weight(.semibold))
@@ -75,6 +81,15 @@ struct SceneScanView: View {
         .background(.ultraThinMaterial, in: Capsule())
     }
 
+    private func banner(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.callout.weight(.semibold))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(color.opacity(0.9), in: Capsule())
+            .foregroundStyle(.black)
+    }
+
     private func stat(_ label: String, _ value: String, _ icon: String) -> some View {
         VStack(spacing: 2) {
             Label(value, systemImage: icon).font(.subheadline.monospacedDigit().bold())
@@ -92,6 +107,7 @@ struct SceneScanView: View {
                 }
                 .pickerStyle(.segmented)
                 VStack(spacing: 4) {
+                    Toggle("Escanear por ubicaciones", isOn: $scanner.settings.stationMode)
                     Toggle("Rellenar huecos", isOn: $scanner.settings.fillHoles)
                     Toggle("Detectar objetos", isOn: $scanner.settings.detectObjects)
                     Toggle("Guardar fotos para IA en la nube", isOn: $scanner.settings.saveCloudPhotos)
@@ -100,12 +116,31 @@ struct SceneScanView: View {
                 .tint(.cyan)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                Text("Recorre la zona despacio, a 0,5–3 m, apuntando a todas las superficies.")
+                Text(scanner.settings.stationMode
+                     ? "Colócate en un punto y gira despacio sobre ti mismo; luego pasa a la siguiente ubicación."
+                     : "Recorre la zona despacio, a 0,5–3 m, apuntando a todas las superficies.")
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .padding(8)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 PrimaryButton("Iniciar escaneo", systemImage: "record.circle") { scanner.start() }
+
+            case .scanning where scanner.settings.stationMode:
+                Text("Ubicación \(scanner.stationCount) · gira despacio y apunta arriba, abajo y a las esquinas")
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                HStack {
+                    SecondaryButton("Siguiente ubicación", systemImage: "figure.walk") { scanner.goToNextStation() }
+                    PrimaryButton("Finalizar", systemImage: "checkmark") { scanner.finish() }
+                }
+
+            case .moving:
+                HStack {
+                    PrimaryButton("Escanear aquí", systemImage: "scope") { scanner.scanHere() }
+                    SecondaryButton("Finalizar", systemImage: "checkmark") { scanner.finish() }
+                }
 
             case .scanning:
                 HStack {
@@ -148,6 +183,21 @@ private struct ARScanContainer: UIViewRepresentable {
         let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         view.renderOptions.insert(.disableMotionBlur)
         view.debugOptions.insert(.showSceneUnderstanding)
+
+        // Marcador de cada ubicación desde la que se ha escaneado: una esfera a la altura de la cámara.
+        let markers = AnchorEntity(world: .zero)
+        view.scene.addAnchor(markers)
+        scanner.onStationAdded = { [weak markers] position in
+            guard let markers else { return }
+            let sphere = ModelEntity(mesh: .generateSphere(radius: 0.06),
+                                     materials: [UnlitMaterial(color: .cyan)])
+            sphere.position = position
+            markers.addChild(sphere)
+        }
+        scanner.onStationsReset = { [weak markers] in
+            markers?.children.removeAll()
+        }
+
         scanner.attach(view.session)
         return view
     }

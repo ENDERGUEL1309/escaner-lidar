@@ -13,6 +13,8 @@ import UIKit
 final class SceneScanner: NSObject, ARSessionDelegate {
     enum Phase: Equatable {
         case ready, scanning, paused, processing, finished
+        /// Modo por ubicaciones: caminando hacia la siguiente ubicación (no se registra, pero se sigue la posición).
+        case moving
         case failed(String)
     }
 
@@ -27,6 +29,15 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     var trackingHint: String?
     var exportedFiles: [URL] = []
     var detectedObjects: [SceneObjectInfo] = []
+    /// Ubicación actual en el modo por ubicaciones (1, 2, 3…).
+    var stationCount = 0
+    /// La cámara se mueve demasiado rápido: no se registra hasta que vaya más despacio.
+    var isTooFast = false
+
+    /// Se llama con la posición de cada nueva ubicación, para dibujar su marcador en la cámara.
+    @ObservationIgnored var onStationAdded: ((SIMD3<Float>) -> Void)?
+    /// Se llama al empezar un escaneo nuevo, para quitar los marcadores del anterior.
+    @ObservationIgnored var onStationsReset: (() -> Void)?
 
     @ObservationIgnored private weak var session: ARSession?
     @ObservationIgnored private let queue = DispatchQueue(label: "lidar.scan.processing", qos: .userInitiated)
@@ -44,6 +55,10 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     @ObservationIgnored private var previousTransform: simd_float4x4?
     @ObservationIgnored private var previousTimestamp: TimeInterval = 0
     @ObservationIgnored private var keyframeSpacing: Float = 1
+    @ObservationIgnored private var motionTransform: simd_float4x4?
+    @ObservationIgnored private var motionTimestamp: TimeInterval = 0
+    @ObservationIgnored private var linearSpeed: Float = 0     // m/s, suavizada
+    @ObservationIgnored private var angularSpeed: Float = 0    // rad/s, suavizada
 
     static var isSupported: Bool {
         ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
@@ -83,10 +98,32 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         // Descarta la malla que ARKit haya construido antes de pulsar «Iniciar», sin perder el seguimiento.
         session.run(makeConfiguration(), options: [.resetSceneReconstruction])
         phase = .scanning
+        stationCount = 0
+        onStationsReset?()
+        if settings.stationMode { markStation() }
     }
 
     func pause() { if phase == .scanning { phase = .paused } }
     func resume() { if phase == .paused { phase = .scanning } }
+
+    /// Modo por ubicaciones: deja de registrar para caminar hasta la siguiente ubicación.
+    func goToNextStation() {
+        if phase == .scanning { phase = .moving }
+    }
+
+    /// Modo por ubicaciones: empieza a registrar desde la ubicación actual.
+    func scanHere() {
+        guard phase == .moving else { return }
+        phase = .scanning
+        markStation()
+    }
+
+    private func markStation() {
+        stationCount += 1
+        if let transform = session?.currentFrame?.camera.transform {
+            onStationAdded?(SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z))
+        }
+    }
 
     func stop() { session?.pause() }
 
@@ -96,7 +133,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     }
 
     func finish() {
-        guard let session, phase == .scanning || phase == .paused else { return }
+        guard let session, phase == .scanning || phase == .paused || phase == .moving else { return }
         let meshAnchors = session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         session.pause()
         phase = .processing
@@ -147,13 +184,17 @@ final class SceneScanner: NSObject, ARSessionDelegate {
             meshAnchorCount = frame.anchors.reduce(0) { $0 + ($1 is ARMeshAnchor ? 1 : 0) }
         }
 
+        let tooFast = updateMotion(frame)
+        if tooFast != isTooFast { isTooFast = tooFast }
+
         if phase == .scanning {
             considerKeyframe(frame, session: session)
         } else {
             previousTransform = nil
         }
 
-        guard phase == .scanning, !isIntegrating,
+        // Moverse rápido emborrona las fotos y desalinea la profundidad: esos fotogramas no se registran.
+        guard phase == .scanning, !tooFast, !isIntegrating,
               frameCounter % settings.frameInterval == 0 else { return }
 
         // Solo un fotograma en vuelo: si el procesado va lento se saltan fotogramas,
@@ -171,6 +212,24 @@ final class SceneScanner: NSObject, ARSessionDelegate {
                 self.isVolumeFull = full
             }
         }
+    }
+
+    /// Velocidad de la cámara (suavizada para que el aviso no parpadee). Devuelve si va demasiado rápido:
+    /// más de 0,5 m/s caminando o más de ~80°/s girando.
+    private func updateMotion(_ frame: ARFrame) -> Bool {
+        let transform = frame.camera.transform
+        defer {
+            motionTransform = transform
+            motionTimestamp = frame.timestamp
+        }
+        guard case .normal = frame.camera.trackingState, let previous = motionTransform,
+              frame.timestamp > motionTimestamp else { return false }
+        let dt = Float(frame.timestamp - motionTimestamp)
+        let linear = simd_distance(Self.position(of: transform), Self.position(of: previous)) / dt
+        let angular = Self.rotationAngle(from: previous, to: transform) / dt
+        linearSpeed = linearSpeed * 0.85 + linear * 0.15
+        angularSpeed = angularSpeed * 0.85 + angular * 0.15
+        return linearSpeed > 0.5 || angularSpeed > 1.4
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
