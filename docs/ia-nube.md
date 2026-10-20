@@ -1,8 +1,8 @@
 # Post-proceso con IA en la nube
 
-Diseño del servicio que recibe un escaneo de entorno del iPhone, lo mejora con modelos de IA que necesitan GPU y devuelve una escena más completa y mejor etiquetada. Hay un prototipo de la API y del editor web en [`servidor/`](../servidor/README.md); simula la parte de GPU.
+Diseño del servicio que recibe un escaneo de entorno del iPhone, lo mejora con modelos de IA que necesitan GPU y devuelve una escena más completa y mejor etiquetada. Hay un prototipo de la API y del editor web en [`servidor/`](../servidor/README.md) y el trabajador con GPU (etapas A–D) en [`trabajador-gpu/`](../trabajador-gpu/README.md).
 
-> Estado: **diseño + prototipo local**. No hay nada desplegado ni cuentas creadas. Los precios y licencias son orientativos (octubre de 2026) y hay que confirmarlos antes de contratar.
+> Estado: **diseño + prototipo local + trabajador de GPU para Modal (sin desplegar)**. No hay nada desplegado ni cuentas creadas. Los precios y licencias son orientativos (octubre de 2026) y hay que confirmarlos antes de contratar.
 
 ## 1. Qué hace la nube que el iPhone no puede
 
@@ -258,7 +258,7 @@ No se ha tocado el código Swift. Para conectar la app con este servicio:
 |---|---|---|
 | 0 (hecho) | Este documento + prototipo local con trabajador simulado + editor web | `servidor/` |
 | 1 | Desplegar API y editor en Railway con almacenamiento en disco; subida manual desde el ordenador (carpeta del escaneo copiada desde Archivos) | Editor web accesible |
-| 2 | Trabajador real en Modal con etapas A–D (segmentación) | Mejor detección |
+| 2 (código hecho, sin desplegar) | Trabajador real en Modal con etapas A–D (segmentación); modo de prueba con imágenes sintéticas mientras la app no guarda fotos | [`trabajador-gpu/`](../trabajador-gpu/README.md) |
 | 3 | Cambios en la app (§8) | Flujo completo desde el iPhone |
 | 4 | Etapa E (completado) y F (splats) | Objetos completos y vista fotorrealista |
 

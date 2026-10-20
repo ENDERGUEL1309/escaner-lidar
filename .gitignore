@@ -20,3 +20,8 @@ xcuserdata/
 # Servidor (datos locales del prototipo)
 servidor/datos/
 servidor/node_modules/
+
+# Trabajador con GPU (Python)
+__pycache__/
+*.pyc
+trabajador-gpu/.venv/

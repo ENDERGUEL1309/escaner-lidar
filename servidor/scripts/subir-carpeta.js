@@ -1,5 +1,6 @@
 // Sube la carpeta de un escaneo real (copiada del iPhone desde la app Archivos) y la procesa.
-//   npm run subir -- "C:\ruta\Entorno_2026-10-20_18-04-11" [--completado] [--splats]
+//   npm run subir -- "C:\ruta\Entorno_2026-10-20_18-04-11" [--completado] [--splats] [--sin-fotos]
+//   --sin-fotos: la IA usa imágenes sintéticas de la malla aunque haya fotos clave (modo de prueba).
 
 import path from 'node:path';
 import { subirCarpeta } from './cliente.js';
@@ -7,7 +8,7 @@ import { subirCarpeta } from './cliente.js';
 const argumentos = process.argv.slice(2);
 const carpeta = argumentos.find((a) => !a.startsWith('--'));
 if (!carpeta) {
-  console.error('Uso: npm run subir -- <carpeta del escaneo> [--completado] [--splats]');
+  console.error('Uso: npm run subir -- <carpeta del escaneo> [--completado] [--splats] [--sin-fotos]');
   process.exit(1);
 }
 
@@ -17,7 +18,11 @@ try {
     base,
     token: process.env.API_TOKEN,
     carpeta: path.resolve(carpeta),
-    opciones: { completado: argumentos.includes('--completado'), splats: argumentos.includes('--splats') },
+    opciones: {
+      completado: argumentos.includes('--completado'),
+      splats: argumentos.includes('--splats'),
+      vistas: argumentos.includes('--sin-fotos') ? 'sinteticas' : 'auto',
+    },
   });
   console.log(`Listo. Abre el editor: ${base}${estado.editor}`);
 } catch (error) {

@@ -10,7 +10,19 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import * as almacen from './almacen.js';
 import { ErrorHttp } from './almacen.js';
-import * as trabajador from './trabajador.js';
+import { firmaValida, textoEntrada, textoSalida } from './firmas.js';
+
+// Quién procesa: el trabajador simulado (por defecto, sin GPU) o la GPU en Modal (trabajador-gpu/).
+const GPU_PROVEEDOR = (process.env.GPU_PROVEEDOR || 'simulado').toLowerCase();
+const PROVEEDORES = { simulado: './trabajador.js', modal: './modal.js' };
+if (!PROVEEDORES[GPU_PROVEEDOR]) {
+  console.error(`GPU_PROVEEDOR=${GPU_PROVEEDOR} no es válido (usa: ${Object.keys(PROVEEDORES).join(', ')})`);
+  process.exit(1);
+}
+const trabajador = await import(PROVEEDORES[GPU_PROVEEDOR]);
+if (trabajador.comprobarConfiguracion) {
+  try { trabajador.comprobarConfiguracion(); } catch (error) { console.error(error.message); process.exit(1); }
+}
 
 const PUERTO = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.API_TOKEN || null;              // si se define, toda la API lo exige
@@ -61,7 +73,12 @@ async function enviarArchivo(req, res, archivo) {
     'Cache-Control': 'no-cache',
   });
   if (req.method === 'HEAD') return res.end();
-  await pipeline(createReadStream(archivo), res);
+  try {
+    await pipeline(createReadStream(archivo), res);
+  } catch (error) {
+    // El cliente cerró la conexión (a veces justo después de recibir el último byte): no es un error nuestro.
+    if (error.code !== 'ERR_STREAM_PREMATURE_CLOSE') throw error;
+  }
 }
 
 function autorizado(req, url) {
@@ -127,6 +144,8 @@ function validarManifiesto(m) {
     segmentacion: o.segmentacion !== false,
     completado: o.completado === true,
     splats: o.splats === true,
+    // De dónde salen las vistas para la IA: fotos clave reales, imágenes sintéticas de la malla, o lo que haya.
+    vistas: ['fotos', 'sinteticas'].includes(o.vistas) ? o.vistas : 'auto',
     vocabulario: Array.isArray(o.vocabulario)
       ? o.vocabulario.filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim().slice(0, 60)).slice(0, 50)
       : [],
@@ -213,7 +232,7 @@ async function procesarEscaneo(req, res, id) {
   enviarJSON(res, 202, vista(e));
 }
 
-/// Aviso de progreso del trabajador con GPU (en el prototipo no se usa: el simulado escribe directamente).
+/// Aviso de progreso del trabajador con GPU (el simulado no lo usa: escribe directamente en el almacén).
 async function progresoInterno(req, res, id) {
   if (!SECRETO_INTERNO) throw new ErrorHttp(503, 'Define SECRETO_INTERNO para aceptar avisos del trabajador');
   const cuerpo = await leerCuerpo(req);
@@ -223,6 +242,8 @@ async function progresoInterno(req, res, id) {
   let aviso;
   try { aviso = JSON.parse(cuerpo.toString('utf8')); } catch { throw new ErrorHttp(400, 'JSON no válido'); }
   const e = await almacen.actualizar(id, async (e) => {
+    // Avisos tardíos de un trabajo ya terminado (o de uno anterior al último reinicio) no cambian nada.
+    if (e.estado !== 'en_cola' && e.estado !== 'procesando') return;
     if (almacen.ESTADOS.includes(aviso.estado)) e.estado = aviso.estado;
     if (typeof aviso.progreso === 'number') e.progreso = Math.min(1, Math.max(0, aviso.progreso));
     if ('etapa' in aviso) e.etapa = aviso.etapa;
@@ -230,6 +251,39 @@ async function progresoInterno(req, res, id) {
     if (e.estado === 'listo') e.resultados = await almacen.archivosEn(path.join(almacen.carpeta(id), 'salida'));
   });
   enviarJSON(res, 200, vista(e));
+}
+
+/// La GPU descarga un archivo subido con una URL firmada (firmas.js).
+async function entradaInterna(req, res, url, id, ruta) {
+  if (!firmaValida(url, (expira) => textoEntrada(id, ruta, expira))) throw new ErrorHttp(403, 'Firma no válida o caducada');
+  await enviarArchivo(req, res, almacen.rutaArchivo(id, 'entrada', ruta));
+}
+
+/// La GPU sube un resultado con la URL firmada de la salida de su trabajo.
+async function salidaInterna(req, res, url, id, ruta) {
+  if (!firmaValida(url, (expira) => textoSalida(id, expira))) throw new ErrorHttp(403, 'Firma no válida o caducada');
+  const escaneo = await almacen.leer(id);
+  if (escaneo.estado !== 'procesando' && escaneo.estado !== 'en_cola') throw new ErrorHttp(409, 'El trabajo no está en marcha');
+  const largo = Number(req.headers['content-length'] ?? NaN);
+  if (largo > MAX_ARCHIVO) throw new ErrorHttp(413, 'Archivo demasiado grande');
+  const destino = almacen.rutaArchivo(id, 'salida', ruta);
+  await mkdir(path.dirname(destino), { recursive: true });
+  const temporal = `${destino}.subiendo`;
+  let bytes = 0;
+  try {
+    await pipeline(req, async function* (origen) {
+      for await (const trozo of origen) {
+        bytes += trozo.length;
+        if (bytes > MAX_ARCHIVO) throw new ErrorHttp(413, 'Archivo demasiado grande');
+        yield trozo;
+      }
+    }, createWriteStream(temporal));
+    await rename(temporal, destino);
+  } catch (error) {
+    await rm(temporal, { force: true });
+    throw error;
+  }
+  enviarJSON(res, 200, { ruta, bytes });
 }
 
 async function servirPublico(req, res, nombre) {
@@ -250,9 +304,19 @@ async function enrutar(req, res) {
   }
 
   if (partes[0] !== 'api') throw new ErrorHttp(404, 'No encontrado');
-  if (partes[1] === 'salud' && m === 'GET') return enviarJSON(res, 200, { ok: true, autenticacion: Boolean(TOKEN) });
-  if (partes[1] === 'interno' && partes[2] === 'trabajos' && partes[4] === 'progreso' && m === 'POST') {
-    return progresoInterno(req, res, partes[3]);
+  if (partes[1] === 'salud' && m === 'GET') {
+    return enviarJSON(res, 200, { ok: true, autenticacion: Boolean(TOKEN), gpu: GPU_PROVEEDOR });
+  }
+  if (partes[1] === 'interno' && partes[2] === 'trabajos') {
+    const [, , , idTrabajo, zona, ...rutaInterna] = partes;
+    if (zona === 'progreso' && m === 'POST') return progresoInterno(req, res, idTrabajo);
+    if (zona === 'entrada' && rutaInterna.length && (m === 'GET' || m === 'HEAD')) {
+      return entradaInterna(req, res, url, idTrabajo, almacen.rutaSegura(rutaInterna.join('/')));
+    }
+    if (zona === 'salida' && rutaInterna.length && m === 'PUT') {
+      return salidaInterna(req, res, url, idTrabajo, almacen.rutaSegura(rutaInterna.join('/')));
+    }
+    throw new ErrorHttp(404, 'No encontrado');
   }
   if (!autorizado(req, url)) throw new ErrorHttp(401, 'Falta el token (Authorization: Bearer … o ?token=…)');
   if (partes[1] !== 'escaneos') throw new ErrorHttp(404, 'No encontrado');
@@ -314,4 +378,5 @@ await trabajador.reanudarPendientes();
 servidor.listen(PUERTO, () => {
   console.log(`Escáner LiDAR · IA en la nube (prototipo) en http://localhost:${PUERTO}`);
   console.log(`Datos en ${almacen.DIRECTORIO_DATOS}${TOKEN ? ' · API protegida con API_TOKEN' : ''}`);
+  console.log(GPU_PROVEEDOR === 'modal' ? `IA: GPU en Modal (${process.env.MODAL_URL})` : 'IA: trabajador simulado (GPU_PROVEEDOR=modal para la GPU real)');
 });

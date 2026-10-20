@@ -2,7 +2,7 @@
 
 API y editor web del post-proceso con IA descrito en [`docs/ia-nube.md`](../docs/ia-nube.md). Es un **prototipo local**:
 
-- La IA está **simulada**: el trabajador recorre las etapas (segmentación, completado, splats) y devuelve el resultado con el formato definitivo, pero los objetos son los que detectó el iPhone. El de verdad irá en Modal o RunPod con GPU.
+- La IA está **simulada** por defecto: el trabajador recorre las etapas (segmentación, completado, splats) y devuelve el resultado con el formato definitivo, pero los objetos son los que detectó el iPhone. Con `GPU_PROVEEDOR=modal` despacha al **trabajador real con GPU** de [`trabajador-gpu/`](../trabajador-gpu/README.md) (Modal).
 - Los archivos se guardan en disco (`servidor/datos/`), no en R2/S3.
 - El estado se guarda en archivos JSON, no en Postgres.
 
@@ -46,6 +46,10 @@ Se suben `malla_color.ply`, `escena.json`, `objetos/*.ply`, `textura.jpg`, `edic
 | `API_TOKEN` | — | Si se define, toda la API exige `Authorization: Bearer <token>` (o `?token=` en el editor) |
 | `SECRETO_INTERNO` | — | Secreto HMAC para los avisos de progreso del trabajador con GPU |
 | `PAUSA_SIMULADA_MS` | `800` | Duración de cada etapa simulada |
+| `GPU_PROVEEDOR` | `simulado` | `modal` para procesar en la GPU de Modal ([`trabajador-gpu/`](../trabajador-gpu/README.md)) |
+| `MODAL_URL` | — | Con `modal`: URL de la función `lanzar` (la muestra `modal deploy app.py`) |
+| `URL_PUBLICA` | — | Con `modal`: dirección de este servidor accesible desde internet (la GPU descarga y sube ahí) |
+| `VALIDEZ_URLS_S` | `21600` | Con `modal`: caducidad de las URLs firmadas que recibe la GPU |
 | `SERVIDOR` | `http://localhost:8080` | A qué servidor suben `npm run demo` y `npm run subir` |
 
 ## API
@@ -65,6 +69,8 @@ Todas las respuestas son JSON. Con `API_TOKEN`, añadir `Authorization: Bearer <
 | `GET /api/escaneos` | Lista de escaneos |
 | `DELETE /api/escaneos/:id` | Borra el escaneo y todos sus archivos |
 | `POST /api/interno/trabajos/:id/progreso` | Aviso del trabajador con GPU, firmado con HMAC-SHA256 del cuerpo en la cabecera `X-Firma` |
+| `GET /api/interno/trabajos/:id/entrada/<ruta>?expira&firma` | La GPU descarga un archivo subido (URL firmada con `SECRETO_INTERNO`, sin token) |
+| `PUT /api/interno/trabajos/:id/salida/<ruta>?expira&firma` | La GPU sube un resultado mientras el trabajo está en marcha |
 | `GET /editor/:id` | Editor web |
 
 Ejemplo de manifiesto:
@@ -102,7 +108,8 @@ No se ha desplegado nada. Los pasos serían:
 1. Nuevo servicio desde el repositorio de GitHub con *Root Directory* `servidor` (Railway detecta Node y ejecuta `npm start`).
 2. Añadir un **volumen** montado en `/datos` y la variable `DATOS=/datos`.
 3. Definir `API_TOKEN` y `SECRETO_INTERNO`.
-4. Más adelante: Postgres para el estado, R2 para los archivos y el trabajador real en Modal (ver `docs/ia-nube.md` §2 y §9).
+4. Para la IA real: desplegar [`trabajador-gpu/`](../trabajador-gpu/README.md) en Modal y definir `GPU_PROVEEDOR=modal`, `MODAL_URL` y `URL_PUBLICA`.
+5. Más adelante: Postgres para el estado y R2 para los archivos (ver `docs/ia-nube.md` §2 y §9).
 
 ## Archivos
 
@@ -111,7 +118,9 @@ servidor/
 ├── src/
 │   ├── servidor.js       API HTTP, validación y rutas
 │   ├── almacen.js        Escaneos en disco (sustituible por Postgres + R2)
-│   └── trabajador.js     Trabajador simulado y cola en memoria
+│   ├── trabajador.js     Trabajador simulado y cola en memoria
+│   ├── modal.js          Despachador a la GPU en Modal (GPU_PROVEEDOR=modal)
+│   └── firmas.js         URLs firmadas para que la GPU descargue y suba
 ├── public/
 │   ├── index.html        Lista de escaneos
 │   ├── editor.html/.js   Editor 3D (three.js)
@@ -119,5 +128,5 @@ servidor/
 └── scripts/
     ├── cliente.js        Cliente de la API (lo que hará la app)
     ├── demo.js           Escaneo sintético de prueba
-    └── subir-carpeta.js  Sube la carpeta de un escaneo real
+    └── subir-carpeta.js  Sube la carpeta de un escaneo real (--sin-fotos: modo de prueba de la IA)
 ```
