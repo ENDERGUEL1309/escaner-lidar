@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Editor de escena · Escáner LiDAR</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body class="editor">
+  <header>
+    <a href="/" class="volver" title="Todos los escaneos">‹</a>
+    <div class="titulo">
+      <strong id="nombre">Cargando…</strong>
+      <span id="estado" class="secundario"></span>
+    </div>
+    <div class="acciones">
+      <button id="deshacer" title="Deshacer" disabled>↶ Deshacer</button>
+      <label class="interruptor"><input type="checkbox" id="sombreado"> Sombreado</label>
+      <button id="mostrarTodo">Mostrar todo</button>
+      <button id="restaurar" class="peligro">Restaurar original</button>
+      <span id="guardado" class="secundario"></span>
+    </div>
+  </header>
+
+  <main>
+    <div id="lienzo"></div>
+    <aside>
+      <h2>En la escena</h2>
+      <ul id="activos"></ul>
+      <h2 id="tituloBorrados" hidden>Borrados</h2>
+      <ul id="borrados"></ul>
+    </aside>
+
+    <div id="ayuda" class="tarjeta pista">Haz clic en un objeto para seleccionarlo · arrastra para girar la vista · rueda para acercar</div>
+
+    <div id="seleccion" class="tarjeta" hidden>
+      <div class="cabecera">
+        <div>
+          <strong id="selTitulo"></strong>
+          <div id="selDetalle" class="secundario"></div>
+        </div>
+        <button id="cerrar" class="icono" title="Quitar selección">✕</button>
+      </div>
+      <div class="botones">
+        <button id="mover" data-modo="translate">Mover</button>
+        <button id="girar" data-modo="rotate">Girar</button>
+        <button id="bajar" title="Bajar 2 cm">↓</button>
+        <button id="subir" title="Subir 2 cm">↑</button>
+        <button id="aislar">Aislar</button>
+        <button id="borrar" class="peligro">Borrar</button>
+      </div>
+    </div>
+
+    <div id="error" class="tarjeta error" hidden></div>
+  </main>
+
+  <script type="module" src="/static/editor.js"></script>
+</body>
+</html>

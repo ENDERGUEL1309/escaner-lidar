@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Escaneos · Escáner LiDAR</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+  <div class="pagina">
+    <h1>Escaneos</h1>
+    <div class="secundario">Prototipo del post-proceso con IA en la nube · el trabajador de GPU está simulado</div>
+    <table>
+      <thead><tr><th>Nombre</th><th>Estado</th><th>Creado</th><th></th></tr></thead>
+      <tbody id="lista"><tr><td colspan="4" class="secundario">Cargando…</td></tr></tbody>
+    </table>
+    <p class="secundario">Para crear uno de prueba: <code>npm run demo</code>. Para subir un escaneo real copiado del iPhone:</p>
+    <pre>npm run subir -- "C:\ruta\Entorno_2026-10-20_18-04-11"</pre>
+  </div>
+  <script type="module">
+    let token = new URLSearchParams(location.search).get('token');
+    try { if (token) localStorage.setItem('token', token); else token = localStorage.getItem('token'); } catch {}
+    const q = token ? `?token=${encodeURIComponent(token)}` : '';
+    const estados = { esperando_archivos: 'Subiendo', en_cola: 'En cola', procesando: 'Procesando', listo: 'Listo', error: 'Error' };
+
+    async function pintar() {
+      const cuerpo = document.getElementById('lista');
+      try {
+        const r = await fetch(`/api/escaneos${q}`);
+        const escaneos = await r.json();
+        if (!r.ok) throw new Error(escaneos.error);
+        if (escaneos.length === 0) {
+          cuerpo.innerHTML = '<tr><td colspan="4" class="secundario">Todavía no hay escaneos.</td></tr>';
+          return;
+        }
+        cuerpo.replaceChildren(...escaneos.map((e) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td></td><td><span class="etiqueta"></span></td><td class="secundario"></td><td><a>Abrir editor</a></td>';
+          tr.children[0].textContent = e.nombre;
+          const etiqueta = tr.querySelector('.etiqueta');
+          etiqueta.classList.add(e.estado);
+          etiqueta.textContent = e.estado === 'procesando' ? `${estados[e.estado]} ${Math.round(e.progreso * 100)} %` : estados[e.estado];
+          tr.children[2].textContent = new Date(e.creado).toLocaleString('es');
+          tr.querySelector('a').href = e.editor;
+          return tr;
+        }));
+      } catch (error) {
+        cuerpo.innerHTML = '<tr><td colspan="4"></td></tr>';
+        cuerpo.querySelector('td').textContent = `No se pudo cargar: ${error.message}`;
+      }
+    }
+    pintar();
+    setInterval(pintar, 3000);
+  </script>
+</body>
+</html>

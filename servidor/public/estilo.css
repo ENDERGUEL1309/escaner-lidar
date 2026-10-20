@@ -1,0 +1,99 @@
+:root {
+  --fondo: #f5f5f7;
+  --superficie: #ffffff;
+  --texto: #1d1d1f;
+  --secundario: #6e6e73;
+  --borde: #d2d2d7;
+  --acento: #0a84ff;
+  --peligro: #d70015;
+  --lienzo: #000000;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #1c1c1e;
+    --superficie: #2c2c2e;
+    --texto: #f5f5f7;
+    --secundario: #a1a1a6;
+    --borde: #3a3a3c;
+    --acento: #64d2ff;
+    --peligro: #ff453a;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--fondo);
+  color: var(--texto);
+}
+a { color: var(--acento); }
+.secundario { color: var(--secundario); font-size: 13px; font-variant-numeric: tabular-nums; }
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--borde);
+  background: var(--superficie);
+  color: var(--texto);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--acento); }
+button:disabled { opacity: .4; cursor: default; }
+button.activo { background: var(--acento); border-color: var(--acento); color: #fff; }
+button.peligro { color: var(--peligro); }
+button.icono { border: none; background: none; font-size: 18px; color: var(--secundario); }
+
+/* Lista de escaneos */
+.pagina { max-width: 860px; margin: 0 auto; padding: 24px 16px; }
+.pagina h1 { margin: 0 0 4px; }
+table { width: 100%; border-collapse: collapse; margin-top: 16px; background: var(--superficie); border-radius: 12px; overflow: hidden; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--borde); }
+th { font-size: 13px; color: var(--secundario); font-weight: 500; }
+.etiqueta { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; background: var(--fondo); }
+.etiqueta.listo { background: #30d15833; }
+.etiqueta.error { background: #ff453a33; }
+.etiqueta.procesando, .etiqueta.en_cola { background: #0a84ff33; }
+pre { background: var(--superficie); padding: 12px; border-radius: 10px; overflow-x: auto; font-size: 13px; }
+
+/* Editor */
+body.editor { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--superficie); border-bottom: 1px solid var(--borde);
+}
+header .volver { font-size: 26px; text-decoration: none; line-height: 1; }
+header .titulo { display: flex; flex-direction: column; min-width: 0; }
+header .acciones { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.interruptor { display: flex; align-items: center; gap: 4px; font-size: 14px; }
+main { flex: 1; position: relative; display: flex; min-height: 0; }
+#lienzo { flex: 1; background: var(--lienzo); min-width: 0; }
+#lienzo canvas { display: block; }
+aside {
+  width: 260px; overflow-y: auto; background: var(--superficie); border-left: 1px solid var(--borde); padding: 8px 0;
+}
+aside h2 { font-size: 13px; color: var(--secundario); font-weight: 500; margin: 12px 16px 4px; }
+aside ul { list-style: none; margin: 0; padding: 0; }
+aside li { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 16px; cursor: pointer; }
+aside li:hover { background: var(--fondo); }
+aside li.seleccionado { background: color-mix(in srgb, var(--acento) 20%, transparent); }
+aside li .texto { flex: 1; min-width: 0; }
+aside li .texto div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+aside li.borrado .texto div:first-child { text-decoration: line-through; color: var(--secundario); }
+aside li button { padding: 2px 6px; border: none; background: none; color: var(--secundario); }
+.tarjeta {
+  position: absolute; left: 16px; bottom: 16px; max-width: min(520px, calc(100% - 300px));
+  background: color-mix(in srgb, var(--superficie) 90%, transparent); backdrop-filter: blur(12px);
+  border-radius: 16px; padding: 12px 16px; box-shadow: 0 4px 20px #0004;
+}
+.tarjeta.pista { font-size: 13px; padding: 8px 14px; border-radius: 99px; }
+.tarjeta.error { color: var(--peligro); top: 16px; bottom: auto; }
+.tarjeta .cabecera { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.tarjeta .botones { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+@media (max-width: 700px) {
+  main { flex-direction: column; }
+  aside { width: auto; max-height: 30vh; border-left: none; border-top: 1px solid var(--borde); }
+  .tarjeta { max-width: calc(100% - 32px); bottom: calc(30vh + 16px); }
+}

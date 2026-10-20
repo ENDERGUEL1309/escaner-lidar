@@ -1,0 +1,15 @@
+{
+  "name": "escaner-lidar-servidor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prototipo de la API de post-proceso con IA en la nube y editor web para Escáner LiDAR",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/servidor.js",
+    "demo": "node scripts/demo.js",
+    "subir": "node scripts/subir-carpeta.js"
+  }
+}

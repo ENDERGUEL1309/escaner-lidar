@@ -16,3 +16,7 @@ xcuserdata/
 
 # Claude Code (configuración local)
 .claude/
+
+# Servidor (datos locales del prototipo)
+servidor/datos/
+servidor/node_modules/
