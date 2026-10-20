@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var showCloudSettings = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -49,6 +51,14 @@ struct ContentView: View {
                 .padding()
             }
             .navigationTitle("Escáner LiDAR")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showCloudSettings = true } label: {
+                        Label("Ajustes de la nube", systemImage: "icloud.and.arrow.up")
+                    }
+                }
+            }
+            .sheet(isPresented: $showCloudSettings) { CloudSettingsView() }
         }
     }
 

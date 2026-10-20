@@ -1,0 +1,5 @@
+# No subir a Railway: datos de pruebas locales ni secretos (van como variables de entorno)
+datos/
+node_modules/
+.api-token
+.secreto-interno

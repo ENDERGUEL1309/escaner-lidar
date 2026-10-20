@@ -30,6 +30,10 @@ struct ExportedFilesView: View {
                 } footer: {
                     Text("Toca cada objeto para seleccionarlo, aislarlo, ocultarlo o exportarlo por separado.")
                 }
+
+                if CloudEnhancement.isAvailable(for: viewerFolder) {
+                    CloudEnhancementSection(folder: viewerFolder)
+                }
             }
 
             if !objects.isEmpty {

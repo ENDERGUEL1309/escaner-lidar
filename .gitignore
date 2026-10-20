@@ -28,3 +28,4 @@ trabajador-gpu/.venv/
 
 # Secreto compartido servidor <-> GPU (no subir)
 servidor/.secreto-interno
+servidor/.api-token
