@@ -1,6 +1,9 @@
+import Foundation
 import simd
 
-/// Fotograma clave: foto a color + profundidad + pose. Se usan al final para colorear la malla.
+/// Fotograma clave: foto a color + profundidad + pose.
+///  • `image` (~1000 px) se usa para el color por vértice y para la IA de identificación.
+///  • `fullImageURL` es la foto a resolución completa (hasta 12 MP) en disco, para la textura.
 struct Keyframe {
     let image: RGBImage
     let imageCamera: CameraModel
@@ -8,6 +11,10 @@ struct Keyframe {
     let depthWidth: Int
     let depthHeight: Int
     let depthCamera: CameraModel
+    let fullImageURL: URL?
+    let fullCamera: CameraModel
+    let fullWidth: Int
+    let fullHeight: Int
 
     var position: SIMD3<Float> { imageCamera.position }
 
@@ -20,39 +27,38 @@ struct Keyframe {
     }
 }
 
-/// Guarda vistas bien repartidas: solo añade una nueva cuando la cámara se ha movido o girado lo suficiente.
-/// Si se llena, descarta una de cada dos y vuelve más exigente el criterio, para cubrir toda la escena.
+/// Guarda las vistas del escaneo. Si se llena, descarta una de cada dos (y sus fotos en disco);
+/// `decimations` indica cuántas veces ha pasado, para espaciar más las siguientes capturas.
+/// No es thread-safe: úsalo siempre desde la misma cola serie.
 final class KeyframeStore {
     private(set) var frames: [Keyframe] = []
+    private(set) var decimations = 0
     private let maxCount: Int
-    private var minDistance: Float = 0.15            // metros
-    private var minAngleCos: Float = cos(.pi / 12)   // 15°
 
-    init(maxCount: Int = 90) {
+    init(maxCount: Int = 60) {
         self.maxCount = maxCount
     }
 
     var count: Int { frames.count }
 
     func reset() {
+        for frame in frames { deleteFile(of: frame) }
         frames.removeAll()
-        minDistance = 0.15
-        minAngleCos = cos(.pi / 12)
-    }
-
-    func shouldAdd(camera: CameraModel) -> Bool {
-        guard let last = frames.last else { return true }
-        let moved = simd_distance(camera.position, last.position) > minDistance
-        let turned = simd_dot(camera.forward, last.imageCamera.forward) < minAngleCos
-        return moved || turned
+        decimations = 0
     }
 
     func add(_ keyframe: Keyframe) {
         frames.append(keyframe)
-        if frames.count > maxCount {
-            frames = frames.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)
-            minDistance *= 1.5
-            minAngleCos = cos(min(acos(minAngleCos) * 1.5, .pi / 3))
+        guard frames.count > maxCount else { return }
+        var kept: [Keyframe] = []
+        for (i, frame) in frames.enumerated() {
+            if i % 2 == 0 { kept.append(frame) } else { deleteFile(of: frame) }
         }
+        frames = kept
+        decimations += 1
+    }
+
+    private func deleteFile(of frame: Keyframe) {
+        if let url = frame.fullImageURL { try? FileManager.default.removeItem(at: url) }
     }
 }

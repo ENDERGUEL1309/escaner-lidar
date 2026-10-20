@@ -57,6 +57,10 @@ final class SceneViewerModel {
             }
         }.value
 
+        // Textura fotográfica compartida por todos los objetos (si el escaneo la tiene).
+        let textureURL = folder.appendingPathComponent("textura.jpg")
+        let texture = UIImage(contentsOfFile: textureURL.path)
+
         guard !loaded.isEmpty else {
             errorMessage = "No se encontró una malla con color en este escaneo."
             isLoading = false
@@ -66,7 +70,7 @@ final class SceneViewerModel {
         var minP = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var maxP = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
         for (item, mesh) in loaded {
-            let node = SCNNode(geometry: ModelExporter.makeGeometry(mesh))
+            let node = SCNNode(geometry: ModelExporter.makeGeometry(mesh, texture: texture))
             node.name = item.id
             scene.rootNode.addChildNode(node)
             nodes[item.id] = node
@@ -129,7 +133,8 @@ final class SceneViewerModel {
         }
         guard !parts.isEmpty else { return nil }
         let url = folder.appendingPathComponent("escena_editada.obj")
-        return (try? ModelExporter.writeOBJ(parts: parts, to: url)) != nil ? url : nil
+        let material = FileManager.default.fileExists(atPath: folder.appendingPathComponent("modelo.mtl").path) ? "modelo.mtl" : nil
+        return (try? ModelExporter.writeOBJ(parts: parts, to: url, materialFile: material)) != nil ? url : nil
     }
 
     private func applyAppearance() {

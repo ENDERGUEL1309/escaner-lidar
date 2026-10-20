@@ -112,6 +112,8 @@ struct SceneSegment {
     let label: SurfaceLabel
     let kind: Kind
     let mesh: ColoredMesh
+    /// Índices de los triángulos de la malla original que forman este segmento.
+    let triangles: [Int]
 }
 
 /// Datos de cada objeto para el archivo `escena.json` y la interfaz.
@@ -251,31 +253,15 @@ enum SceneSegmenter {
         var triangles = [[Int]](repeating: [], count: segments.count)
         for t in stride(from: 0, to: tri.count, by: 3) {
             let s0 = segmentOf[Int(tri[t])], s1 = segmentOf[Int(tri[t + 1])], s2 = segmentOf[Int(tri[t + 2])]
-            triangles[Int(s1 == s2 ? s1 : s0)].append(t)
+            triangles[Int(s1 == s2 ? s1 : s0)].append(t / 3)
         }
 
-        // Submalla independiente por segmento.
-        var stamp = [Int32](repeating: -1, count: n)
-        var remap = [UInt32](repeating: 0, count: n)
+        // Submalla independiente por segmento (se guardan también los triángulos originales,
+        // para recortar después la misma parte de la malla texturizada).
         var result: [SceneSegment] = []
-        for (s, segment) in segments.enumerated() {
-            var sub = ColoredMesh()
-            for t in triangles[s] {
-                for k in 0..<3 {
-                    let v = Int(tri[t + k])
-                    if stamp[v] != Int32(s) {
-                        stamp[v] = Int32(s)
-                        remap[v] = UInt32(sub.positions.count)
-                        sub.positions.append(mesh.positions[v])
-                        sub.normals.append(mesh.normals[v])
-                        sub.colors.append(mesh.colors[v])
-                    }
-                    sub.indices.append(remap[v])
-                }
-            }
-            if !sub.isEmpty {
-                result.append(SceneSegment(name: segment.name, label: segment.label, kind: segment.kind, mesh: sub))
-            }
+        for (s, segment) in segments.enumerated() where !triangles[s].isEmpty {
+            result.append(SceneSegment(name: segment.name, label: segment.label, kind: segment.kind,
+                                       mesh: mesh.submesh(triangles: triangles[s]), triangles: triangles[s]))
         }
         return result
     }

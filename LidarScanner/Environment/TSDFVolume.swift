@@ -105,7 +105,8 @@ final class TSDFVolume {
                             let sdf = d - pr.z
                             guard sdf > -trunc else { continue }   // muy detrás de la superficie: no observado
 
-                            let w: Float = c >= 2 ? 1 : 0.4
+                            // Más peso a lecturas de alta confianza y cercanas: el error del LiDAR crece con la distancia².
+                            let w: Float = (c >= 2 ? 1 : 0.4) * max(0.15, min(1, 1 / (d * d)))
                             var v = vox[idx]
                             let oldW = Float(v.weight)
                             let total = oldW + w
@@ -160,7 +161,7 @@ final class TSDFVolume {
                         guard count >= 3 else { continue }
                         var filled = Voxel()
                         filled.sdf = Float16(sdfSum / count)
-                        filled.weight = 0.05
+                        filled.weight = Self.filledWeight
                         if colorCount > 0 {
                             let c = rgb8(colorSum / colorCount)
                             filled.r = c.x; filled.g = c.y; filled.b = c.z
@@ -184,7 +185,9 @@ final class TSDFVolume {
     /// Genera una malla triangular con color y normales en la isosuperficie sdf = 0.
     /// Surface Nets coloca un vértice por celda que cruza la superficie y une celdas vecinas con quads:
     /// produce mallas suaves, sin agujeros entre bloques y sin las tablas de Marching Cubes.
-    func extractMesh() -> ColoredMesh {
+    /// `minWeight`: peso acumulado mínimo para fiarse de un vóxel. Lo que solo se vio de pasada
+    /// (reflejos, lecturas sueltas, bordes) no llega al mínimo y no genera superficie.
+    func extractMesh(minWeight: Float = 1) -> ColoredMesh {
         var mesh = ColoredMesh()
         let list = Array(blocks.values)
         guard !list.isEmpty else { return mesh }
@@ -205,7 +208,7 @@ final class TSDFVolume {
                 let x = idx & 7, y = (idx >> 3) & 7, z = idx >> 6
                 var valid = true, anyInside = false, anyOutside = false
                 for c in 0..<8 {
-                    guard let v = hood.voxel(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1)) else { valid = false; break }
+                    guard let v = hood.voxel(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1), minWeight: minWeight) else { valid = false; break }
                     corners[c] = v
                     if v.sdf < 0 { anyInside = true } else { anyOutside = true }
                 }
@@ -253,11 +256,11 @@ final class TSDFVolume {
             let hood = hoods[n]
             for idx in 0..<512 {
                 let x = idx & 7, y = (idx >> 3) & 7, z = idx >> 6
-                guard let v = hood.voxel(x, y, z) else { continue }
+                guard let v = hood.voxel(x, y, z, minWeight: minWeight) else { continue }
                 let inside = v.sdf < 0
                 for axis in 0..<3 {
                     let ea = units[axis], eb = units[(axis + 1) % 3], ec = units[(axis + 2) % 3]
-                    guard let neighbor = hood.voxel(x + ea.0, y + ea.1, z + ea.2),
+                    guard let neighbor = hood.voxel(x + ea.0, y + ea.1, z + ea.2, minWeight: minWeight),
                           (neighbor.sdf < 0) != inside else { continue }
                     let q00 = hood.vertex(x - eb.0 - ec.0, y - eb.1 - ec.1, z - eb.2 - ec.2)
                     let q10 = hood.vertex(x - ec.0, y - ec.1, z - ec.2)
@@ -276,7 +279,11 @@ final class TSDFVolume {
 
     // MARK: - Utilidades
 
-    private static let faceOffsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+    /// Peso con el que se marcan los vóxeles rellenados (no medidos). Las lecturas reales nunca suman
+    /// exactamente esto (la mínima es 0,4 × 0,15 = 0,06).
+    static let filledWeight: Float16 = 0.05
+
+    private static let faceOffsets =[(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
 
     @inline(__always)
     private static func key(_ b: SIMD3<Int32>) -> Int64 {
@@ -302,13 +309,14 @@ final class TSDFVolume {
             return (blocks[bx + by * 3 + bz * 9], (x & 7) + (y & 7) * 8 + (z & 7) * 64)
         }
 
-        /// Vóxel observado (peso > 0) o `nil`.
+        /// Vóxel observado con al menos `minWeight` de peso (o rellenado como hueco), o `nil`.
         @inline(__always)
-        func voxel(_ x: Int, _ y: Int, _ z: Int) -> Voxel? {
+        func voxel(_ x: Int, _ y: Int, _ z: Int, minWeight: Float = 0) -> Voxel? {
             let (block, i) = locate(x, y, z)
             guard let block else { return nil }
             let v = block.voxels[i]
-            return v.weight > 0 ? v : nil
+            guard v.weight > 0 else { return nil }
+            return (Float(v.weight) >= minWeight || v.weight == TSDFVolume.filledWeight) ? v : nil
         }
 
         @inline(__always)

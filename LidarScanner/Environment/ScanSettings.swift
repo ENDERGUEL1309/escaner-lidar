@@ -34,6 +34,11 @@ struct ScanSettings {
         }
     }
 
+    /// Lado (px) de la imagen de textura. 8192² son 64 Mpx: el máximo detalle sin agotar la memoria.
+    var atlasSize: Int {
+        quality == .precise ? 8192 : 4096
+    }
+
     /// El LiDAR del iPhone es fiable hasta ~5 m; más lejos el ruido crece mucho.
     var maxDepth: Float {
         quality == .precise ? 3.0 : 4.0

@@ -6,9 +6,37 @@ struct ColoredMesh {
     var normals: [SIMD3<Float>] = []
     var colors: [SIMD3<UInt8>] = []
     var indices: [UInt32] = []
+    /// Coordenadas de textura (0–1, origen arriba a la izquierda) si la malla está texturizada.
+    var uvs: [SIMD2<Float>] = []
 
     var isEmpty: Bool { positions.isEmpty || indices.isEmpty }
     var triangleCount: Int { indices.count / 3 }
+    var hasTexture: Bool { !uvs.isEmpty }
+
+    /// Submalla con los triángulos indicados (índice de triángulo, no de vértice), con vértices reindexados.
+    func submesh(triangles: [Int]) -> ColoredMesh {
+        var sub = ColoredMesh()
+        var remap: [UInt32: UInt32] = [:]
+        remap.reserveCapacity(triangles.count * 2)
+        for t in triangles {
+            for k in 0..<3 {
+                let v = indices[t * 3 + k]
+                if let r = remap[v] {
+                    sub.indices.append(r)
+                    continue
+                }
+                let r = UInt32(sub.positions.count)
+                remap[v] = r
+                let i = Int(v)
+                sub.positions.append(positions[i])
+                sub.normals.append(normals[i])
+                sub.colors.append(colors[i])
+                if hasTexture { sub.uvs.append(uvs[i]) }
+                sub.indices.append(r)
+            }
+        }
+        return sub
+    }
 }
 
 enum MeshBuilder {

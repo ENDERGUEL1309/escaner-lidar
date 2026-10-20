@@ -108,14 +108,18 @@ struct ExportedFilesView: View {
         case "obj": "cube.transparent"
         case "json": "list.bullet.rectangle"
         case "ply": url.lastPathComponent.contains("nube") ? "circle.grid.3x3.fill" : "square.grid.3x3.square"
+        case "jpg": "photo"
+        case "mtl": "paintpalette"
         default: "doc"
         }
     }
 
     private func description(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
-        case "usdz": url.lastPathComponent.hasPrefix("modelo") ? "Modelo con textura · 3D / AR" : "Geometría para AR (sin color: usa «Ver en 3D a color»)"
-        case "obj": url.lastPathComponent.contains("objetos") ? "Escena separada por objetos" : "Malla con color (Blender, ZBrush…)"
+        case "usdz": url.lastPathComponent.hasPrefix("malla_color") ? "Geometría para AR (sin color: usa «Ver en 3D a color»)" : "Con textura fotográfica · 3D / AR"
+        case "obj": url.lastPathComponent.contains("objetos") ? "Escena separada por objetos (Blender)" : "Modelo completo con textura (Blender, ZBrush…)"
+        case "jpg": "Textura fotográfica de alta resolución"
+        case "mtl": "Material del OBJ (enlaza la textura)"
         case "json": "Inventario de objetos y medidas"
         case "ply": url.lastPathComponent.contains("nube") ? "Nube de puntos a color" : "Malla con color y normales"
         default: "Archivo"
