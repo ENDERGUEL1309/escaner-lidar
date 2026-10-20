@@ -15,6 +15,8 @@ struct Keyframe {
     let fullCamera: CameraModel
     let fullWidth: Int
     let fullHeight: Int
+    /// Momento de la captura (segundos de ARKit), para ordenar las fotos.
+    let timestamp: TimeInterval
 
     var position: SIMD3<Float> { imageCamera.position }
 

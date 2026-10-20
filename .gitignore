@@ -25,3 +25,6 @@ servidor/node_modules/
 __pycache__/
 *.pyc
 trabajador-gpu/.venv/
+
+# Secreto compartido servidor <-> GPU (no subir)
+servidor/.secreto-interno

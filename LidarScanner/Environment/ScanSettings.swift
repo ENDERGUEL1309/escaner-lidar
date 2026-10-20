@@ -13,6 +13,8 @@ struct ScanSettings {
     var fillHoles = true
     /// Separa la escena en estructura (paredes, suelo…) y objetos editables.
     var detectObjects = true
+    /// Guarda las fotos de 12 MP con sus cámaras en `fotos_clave/` (unos 3–5 MB por foto) para la IA en la nube.
+    var saveCloudPhotos = true
     /// Las lecturas de confianza media se usan con menos peso; las bajas se descartan.
     var minConfidence: ARConfidenceLevel = .medium
 

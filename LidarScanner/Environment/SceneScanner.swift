@@ -224,10 +224,10 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         lastKeyframeTransform = transform
         isCapturingKeyframe = true
 
-        let store: (CVPixelBuffer, ARCamera) -> Void = { [weak self] buffer, camera in
+        let store: (CVPixelBuffer, ARCamera, TimeInterval) -> Void = { [weak self] buffer, camera, time in
             guard let self else { return }
             self.queue.async {
-                self.storeKeyframe(buffer: buffer, camera: camera, depth: snapshot, depthCamera: depthCamera)
+                self.storeKeyframe(buffer: buffer, camera: camera, depth: snapshot, depthCamera: depthCamera, timestamp: time)
                 let count = self.keyframes.count
                 let spacing = pow(1.5, Float(self.keyframes.decimations))
                 DispatchQueue.main.async {
@@ -241,19 +241,19 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         if Self.supportsHighResolutionPhotos {
             session.captureHighResolutionFrame { highRes, _ in
                 if let highRes {
-                    store(highRes.capturedImage, highRes.camera)
+                    store(highRes.capturedImage, highRes.camera, highRes.timestamp)
                 } else {
-                    store(frame.capturedImage, frame.camera)
+                    store(frame.capturedImage, frame.camera, timestamp)
                 }
             }
         } else {
-            store(frame.capturedImage, frame.camera)
+            store(frame.capturedImage, frame.camera, timestamp)
         }
     }
 
     private func storeKeyframe(buffer: CVPixelBuffer, camera: ARCamera,
                                depth: (depth: [Float], confidence: [UInt8], width: Int, height: Int),
-                               depthCamera: CameraModel) {
+                               depthCamera: CameraModel, timestamp: TimeInterval) {
         let width = CVPixelBufferGetWidth(buffer)
         let height = CVPixelBufferGetHeight(buffer)
         let resolution = camera.imageResolution
@@ -283,7 +283,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         keyframes.add(Keyframe(image: small, imageCamera: smallCamera,
                                depth: occlusionDepth, depthWidth: depth.width, depthHeight: depth.height,
                                depthCamera: depthCamera,
-                               fullImageURL: url, fullCamera: fullCamera, fullWidth: width, fullHeight: height))
+                               fullImageURL: url, fullCamera: fullCamera, fullWidth: width, fullHeight: height, timestamp: timestamp))
     }
 
     private static func position(of t: simd_float4x4) -> SIMD3<Float> {
@@ -495,7 +495,13 @@ final class SceneScanner: NSObject, ARSessionDelegate {
             }
         }
 
-        keyframes.reset()   // borra las fotos temporales
+        // Fotos de 12 MP con sus cámaras y profundidad, para procesar el escaneo con la IA en la nube.
+        if settings.saveCloudPhotos {
+            report("Guardando fotos para la IA en la nube", 0.97)
+            try? CloudExport.saveKeyframes(keyframes.frames, to: folder)
+        }
+
+        keyframes.reset()   // borra las fotos temporales que queden
         report("Listo", 1)
         return (files, objects)
     }

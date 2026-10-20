@@ -94,6 +94,7 @@ struct SceneScanView: View {
                 VStack(spacing: 4) {
                     Toggle("Rellenar huecos", isOn: $scanner.settings.fillHoles)
                     Toggle("Detectar objetos", isOn: $scanner.settings.detectObjects)
+                    Toggle("Guardar fotos para IA en la nube", isOn: $scanner.settings.saveCloudPhotos)
                 }
                 .font(.subheadline)
                 .tint(.cyan)
