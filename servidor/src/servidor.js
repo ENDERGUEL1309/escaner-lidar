@@ -3,7 +3,7 @@
 
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -167,10 +167,58 @@ function normalizarEdicion(datos) {
   return { objetos };
 }
 
+// ------------------------------------------------------------------------------------------------ espacio en disco
+
+const MARGEN_DISCO = 50 * 1024 * 1024;
+const CADUCIDAD_SUBIDA_MS = 2 * 3600 * 1000;   // subidas a medias abandonadas
+
+const mb = (bytes) => Math.round(bytes / 1024 / 1024);
+
+async function espacioLibre() {
+  const s = await statfs(almacen.DIRECTORIO_DATOS);
+  return s.bavail * s.bsize;
+}
+
+function errorSinEspacio(libre, necesario) {
+  const detalle = libre != null ? ` (quedan ${mb(libre)} MB${necesario ? ` y el escaneo ocupa ${mb(necesario)} MB` : ''})` : '';
+  return new ErrorHttp(507, `El servidor no tiene espacio suficiente${detalle}. Amplía el disco del servidor en Railway.`);
+}
+
+/// Una vez procesado, la entrada (fotos, malla) ya no hace falta: el editor y la app usan la salida.
+/// Las ediciones hechas en el iPhone se conservan junto al escaneo.
+async function liberarEntrada(id) {
+  const entrada = path.join(almacen.carpeta(id), 'entrada');
+  if (!(await almacen.existe(entrada))) return;
+  const edicion = path.join(entrada, 'edicion.json');
+  const destino = path.join(almacen.carpeta(id), 'edicion.json');
+  if ((await almacen.existe(edicion)) && !(await almacen.existe(destino))) await copyFile(edicion, destino);
+  await rm(entrada, { recursive: true, force: true });
+}
+
+/// Libera la entrada de los escaneos ya procesados y borra las subidas a medias abandonadas.
+async function limpiar() {
+  try {
+    for (const e of await almacen.listar()) {
+      if (e.estado === 'listo') await liberarEntrada(e.id);
+      if (e.estado === 'esperando_archivos' && Date.now() - Date.parse(e.actualizado) > CADUCIDAD_SUBIDA_MS) {
+        await almacen.borrar(e.id);
+        console.log(`[limpieza] subida abandonada ${e.id} (${e.nombre}) borrada`);
+      }
+    }
+  } catch (error) {
+    console.error('[limpieza]', error);
+  }
+}
+
 // ------------------------------------------------------------------------------------------------ rutas
 
 async function crearEscaneo(req, res) {
   const manifiesto = validarManifiesto(await leerJSON(req));
+  // Antes de aceptar la subida: ¿cabe? Así el iPhone no sube cientos de MB para nada.
+  const necesario = manifiesto.archivos.reduce((t, a) => t + a.bytes, 0);
+  await limpiar();
+  const libre = await espacioLibre();
+  if (necesario + MARGEN_DISCO > libre) throw errorSinEspacio(libre, necesario);
   const e = await almacen.crear(manifiesto);
   enviarJSON(res, 201, {
     ...vista(e),
@@ -250,6 +298,7 @@ async function progresoInterno(req, res, id) {
     if ('error' in aviso) e.error = aviso.error;
     if (e.estado === 'listo') e.resultados = await almacen.archivosEn(path.join(almacen.carpeta(id), 'salida'));
   });
+  if (e.estado === 'listo') await liberarEntrada(id);
   enviarJSON(res, 200, vista(e));
 }
 
@@ -364,6 +413,7 @@ const servidor = http.createServer(async (req, res) => {
   try {
     await enrutar(req, res);
   } catch (error) {
+    if (error?.code === 'ENOSPC') error = errorSinEspacio(await espacioLibre().catch(() => null));
     const codigo = error instanceof ErrorHttp ? error.codigo : 500;
     if (codigo === 500) console.error(error);
     if (!res.headersSent) enviarJSON(res, codigo, { error: codigo === 500 ? 'Error interno' : error.message });
@@ -375,6 +425,8 @@ const servidor = http.createServer(async (req, res) => {
 
 await mkdir(almacen.DIRECTORIO_DATOS, { recursive: true });
 await trabajador.reanudarPendientes();
+await limpiar();
+setInterval(limpiar, 15 * 60 * 1000).unref();
 servidor.listen(PUERTO, () => {
   console.log(`Escáner LiDAR · IA en la nube (prototipo) en http://localhost:${PUERTO}`);
   console.log(`Datos en ${almacen.DIRECTORIO_DATOS}${TOKEN ? ' · API protegida con API_TOKEN' : ''}`);
