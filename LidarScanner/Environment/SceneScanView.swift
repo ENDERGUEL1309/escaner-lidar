@@ -111,6 +111,7 @@ struct SceneScanView: View {
                     Toggle("Rellenar huecos", isOn: $scanner.settings.fillHoles)
                     Toggle("Detectar objetos", isOn: $scanner.settings.detectObjects)
                     Toggle("Guardar fotos para IA en la nube", isOn: $scanner.settings.saveCloudPhotos)
+                    Toggle("Fotogramas para vista fotorrealista", isOn: $scanner.settings.captureSplatFrames)
                 }
                 .font(.subheadline)
                 .tint(.cyan)

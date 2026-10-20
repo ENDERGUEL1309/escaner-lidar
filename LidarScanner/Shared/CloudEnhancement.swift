@@ -47,6 +47,17 @@ final class CloudEnhancement {
         FileManager.default.fileExists(atPath: folder.appendingPathComponent("fotos_clave/camaras.json").path)
     }
 
+    /// Hay fotogramas para la vista fotorrealista (Gaussian Splatting).
+    var hasSplatFrames: Bool {
+        FileManager.default.fileExists(atPath: folder.appendingPathComponent("fotogramas/camaras.json").path)
+    }
+
+    /// Pedir también la vista fotorrealista (≈10–15 min más de GPU).
+    var includeSplats = true
+
+    /// La vista fotorrealista ya descargada, si la hay.
+    var splatFile: URL? { SplatViewerView.file(in: folder) }
+
     var uploadSizeText: String {
         let bytes = CloudClient.filesToUpload(in: folder).reduce(Int64(0)) { total, path in
             total + Int64((try? folder.appendingPathComponent(path).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
@@ -138,7 +149,7 @@ final class CloudEnhancement {
             let client = try CloudClient()
             if upload {
                 phase = .uploading(0)
-                let id = try await client.upload(folder: folder) { [weak self] fraction in
+                let id = try await client.upload(folder: folder, splats: includeSplats && hasSplatFrames) { [weak self] fraction in
                     Task { @MainActor in self?.phase = .uploading(fraction) }
                 }
                 job = Job(id: id, servidor: CloudConfig.server)
@@ -217,6 +228,11 @@ struct CloudEnhancementSection: View {
                         .font(.headline)
                         .foregroundStyle(.purple)
                 }
+                if model.hasSplatFrames {
+                    Toggle("Incluir vista fotorrealista (+10–15 min)", isOn: $model.includeSplats)
+                        .font(.subheadline)
+                        .tint(.purple)
+                }
                 Text("Se subirán \(model.uploadSizeText)\(model.hasPhotos ? " (con fotos de 12 MP)" : " (sin fotos: detección más limitada)").")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -239,10 +255,12 @@ struct CloudEnhancementSection: View {
                 Button { model.apply() } label: {
                     Label("Usar los objetos de la IA en la nube", systemImage: "arrow.triangle.2.circlepath")
                 }
+                splatLink
 
             case .applied:
                 Label("Usando los objetos de la IA en la nube", systemImage: "sparkles")
                     .foregroundStyle(.purple)
+                splatLink
                 Button(role: .destructive) { model.restoreOriginal() } label: {
                     Label("Volver a los objetos del iPhone", systemImage: "arrow.uturn.backward")
                 }
@@ -252,6 +270,18 @@ struct CloudEnhancementSection: View {
                     .foregroundStyle(.orange)
                     .font(.callout)
                 Button("Reintentar") { model.start() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var splatLink: some View {
+        if let file = model.splatFile {
+            NavigationLink {
+                SplatViewerView(file: file)
+            } label: {
+                Label("Vista fotorrealista", systemImage: "camera.filters")
+                    .foregroundStyle(.purple)
             }
         }
     }

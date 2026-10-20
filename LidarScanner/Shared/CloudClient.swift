@@ -120,7 +120,7 @@ struct CloudClient {
     }
 
     /// Sube la carpeta del escaneo y lanza el procesado. Devuelve el identificador del trabajo.
-    func upload(folder: URL, progress: @escaping (Double) -> Void) async throws -> String {
+    func upload(folder: URL, splats: Bool, progress: @escaping (Double) -> Void) async throws -> String {
         let files = Self.filesToUpload(in: folder)
         guard files.contains(where: { $0 == "malla_color.ply" || $0 == "escena.json" }) else { throw CloudError.nothingToUpload }
 
@@ -135,7 +135,7 @@ struct CloudClient {
         let manifest: [String: Any] = [
             "version": 1,
             "nombre": folder.lastPathComponent,
-            "opciones": ["segmentacion": true, "vistas": "auto"],
+            "opciones": ["segmentacion": true, "splats": splats, "vistas": "auto"],
             "archivos": entries,
         ]
         let created: Created = try decode(try await request("POST", "/api/escaneos",
@@ -191,7 +191,8 @@ struct CloudClient {
         let fm = FileManager.default
         var files = ["malla_color.ply", "escena.json", "textura.jpg", "edicion.json"]
             .filter { fm.fileExists(atPath: folder.appendingPathComponent($0).path) }
-        for (sub, extensions) in [("objetos", ["ply"]), ("fotos_clave", ["jpg", "jpeg", "prof", "json"])] {
+        for (sub, extensions) in [("objetos", ["ply"]), ("fotos_clave", ["jpg", "jpeg", "prof", "json"]),
+                                  ("fotogramas", ["jpg", "json"])] {
             let dir = folder.appendingPathComponent(sub)
             let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
             files += names.filter { extensions.contains(($0 as NSString).pathExtension.lowercased()) }

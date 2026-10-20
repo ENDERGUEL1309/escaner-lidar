@@ -9,7 +9,8 @@ import { archivosEn } from '../src/almacen.js';
 export function seSube(ruta) {
   return ['malla_color.ply', 'escena.json', 'textura.jpg', 'edicion.json', 'manifiesto.json'].includes(ruta) ||
     /^objetos\/[^/]+\.ply$/.test(ruta) ||
-    /^fotos_clave\/[^/]+\.(jpg|jpeg|prof|json)$/i.test(ruta);
+    /^fotos_clave\/[^/]+\.(jpg|jpeg|prof|json)$/i.test(ruta) ||
+    /^fotogramas\/[^/]+\.(jpg|json)$/i.test(ruta);
 }
 
 export async function subirCarpeta({ base, token, carpeta, opciones = {}, registro = console.log }) {

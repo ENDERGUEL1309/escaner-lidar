@@ -57,6 +57,15 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     @ObservationIgnored private var keyframeSpacing: Float = 1
     @ObservationIgnored private var motionTransform: simd_float4x4?
     @ObservationIgnored private var motionTimestamp: TimeInterval = 0
+    @ObservationIgnored private var lastSplatFrameTime: TimeInterval = 0
+    @ObservationIgnored private var lastSplatFrameTransform: simd_float4x4?
+    @ObservationIgnored private var isSavingSplatFrame = false
+    @ObservationIgnored private var splatFrameCount = 0
+    // Fotogramas para Gaussian Splatting: se codifican en su propia cola para no frenar la fusión.
+    @ObservationIgnored private let splatQueue = DispatchQueue(label: "lidar.scan.fotogramas", qos: .utility)
+    @ObservationIgnored private var splatRecords: [CloudExport.Photo] = []          // solo desde `splatQueue`
+    @ObservationIgnored private let splatFolder = FileManager.default.temporaryDirectory
+        .appendingPathComponent("Fotogramas", isDirectory: true)
     @ObservationIgnored private var linearSpeed: Float = 0     // m/s, suavizada
     @ObservationIgnored private var angularSpeed: Float = 0    // rad/s, suavizada
 
@@ -95,6 +104,14 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         detectedObjects = []
         lastKeyframeTransform = nil
         keyframeSpacing = 1
+        splatFrameCount = 0
+        lastSplatFrameTransform = nil
+        let frames = splatFolder
+        splatQueue.async { [weak self] in
+            self?.splatRecords = []
+            try? FileManager.default.removeItem(at: frames)
+            try? FileManager.default.createDirectory(at: frames, withIntermediateDirectories: true)
+        }
         // Descarta la malla que ARKit haya construido antes de pulsar «Iniciar», sin perder el seguimiento.
         session.run(makeConfiguration(), options: [.resetSceneReconstruction])
         phase = .scanning
@@ -189,6 +206,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
 
         if phase == .scanning {
             considerKeyframe(frame, session: session)
+            if settings.captureSplatFrames, !tooFast { considerSplatFrame(frame) }
         } else {
             previousTransform = nil
         }
@@ -212,6 +230,62 @@ final class SceneScanner: NSObject, ARSessionDelegate {
                 self.isVolumeFull = full
             }
         }
+    }
+
+    /// Fotograma para Gaussian Splatting: cada ~0,5 s si la cámara se ha movido o girado un poco desde el anterior.
+    private func considerSplatFrame(_ frame: ARFrame) {
+        guard !isSavingSplatFrame, splatFrameCount < ScanSettings.maxSplatFrames,
+              case .normal = frame.camera.trackingState,
+              frame.timestamp - lastSplatFrameTime >= 0.5 else { return }
+        let transform = frame.camera.transform
+        if let last = lastSplatFrameTransform {
+            let moved = simd_distance(Self.position(of: transform), Self.position(of: last)) > 0.03
+            let turned = Self.rotationAngle(from: last, to: transform) > 4 * .pi / 180
+            guard moved || turned else { return }
+        }
+        isSavingSplatFrame = true
+        lastSplatFrameTime = frame.timestamp
+        lastSplatFrameTransform = transform
+
+        let buffer = frame.capturedImage
+        let camera = frame.camera
+        let timestamp = frame.timestamp
+        let index = splatFrameCount
+        splatQueue.async { [weak self] in
+            guard let self else { return }
+            let saved = self.saveSplatFrame(buffer: buffer, camera: camera, timestamp: timestamp, index: index)
+            DispatchQueue.main.async {
+                self.isSavingSplatFrame = false
+                if saved { self.splatFrameCount += 1 }
+            }
+        }
+    }
+
+    /// Reduce el fotograma a 1280 px de ancho y lo guarda en JPEG con su cámara (intrínsecos escalados).
+    private func saveSplatFrame(buffer: CVPixelBuffer, camera: ARCamera, timestamp: TimeInterval, index: Int) -> Bool {
+        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+        let scale = min(1, 1280 / Float(width))
+        let name = String(format: "%04d.jpg", index)
+        let image = CIImage(cvPixelBuffer: buffer)
+            .transformed(by: CGAffineTransform(scaleX: CGFloat(scale), y: CGFloat(scale)))
+        let quality = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
+        do {
+            try ciContext.writeJPEGRepresentation(of: image, to: splatFolder.appendingPathComponent(name),
+                                                  colorSpace: CGColorSpaceCreateDeviceRGB(), options: [quality: 0.8])
+        } catch {
+            return false
+        }
+        let resolution = camera.imageResolution
+        let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
+            .scaled(sx: Float(width) / Float(resolution.width) * scale, sy: Float(height) / Float(resolution.height) * scale)
+        let m = model.cameraToWorld
+        splatRecords.append(CloudExport.Photo(
+            archivo: name,
+            ancho: Int((Float(width) * scale).rounded()), alto: Int((Float(height) * scale).rounded()),
+            fx: model.fx, fy: model.fy, cx: model.cx, cy: model.cy,
+            cameraToWorld: [m.columns.0, m.columns.1, m.columns.2, m.columns.3].flatMap { [$0.x, $0.y, $0.z, $0.w] },
+            marcaTiempo: timestamp, profundidad: nil))
+        return true
     }
 
     /// Velocidad de la cámara (suavizada para que el aviso no parpadee). Devuelve si va demasiado rápido:
@@ -558,6 +632,11 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         if settings.saveCloudPhotos {
             report("Guardando fotos para la IA en la nube", 0.97)
             try? CloudExport.saveKeyframes(keyframes.frames, to: folder)
+        }
+        if settings.captureSplatFrames {
+            report("Guardando fotogramas para la vista fotorrealista", 0.98)
+            let records = splatQueue.sync { splatRecords }   // espera a que termine el último fotograma
+            try? CloudExport.saveFrames(records, from: splatFolder, to: folder)
         }
 
         keyframes.reset()   // borra las fotos temporales que queden

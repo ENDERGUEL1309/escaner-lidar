@@ -73,6 +73,24 @@ enum CloudExport {
         return photos.count
     }
 
+    /// Mueve los fotogramas para Gaussian Splatting a `fotogramas/` y escribe su `camaras.json`
+    /// (mismo formato que `fotos_clave/`, sin profundidad).
+    static func saveFrames(_ records: [Photo], from temporary: URL, to folder: URL) throws {
+        guard !records.isEmpty else { return }
+        let directory = folder.appendingPathComponent("fotogramas", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var saved: [Photo] = []
+        for record in records {
+            let source = temporary.appendingPathComponent(record.archivo)
+            guard (try? FileManager.default.moveItem(at: source, to: directory.appendingPathComponent(record.archivo))) != nil
+            else { continue }
+            saved.append(record)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(Cameras(fotos: saved)).write(to: directory.appendingPathComponent("camaras.json"), options: .atomic)
+    }
+
     /// 16 valores por columnas, igual que `simd_float4x4`.
     private static func columns(of m: simd_float4x4) -> [Float] {
         [m.columns.0, m.columns.1, m.columns.2, m.columns.3].flatMap { [$0.x, $0.y, $0.z, $0.w] }

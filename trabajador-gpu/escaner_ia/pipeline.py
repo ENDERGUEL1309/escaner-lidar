@@ -215,10 +215,18 @@ def procesar(entrada: Path, salida: Path, opciones: dict, modelos, enviar=lambda
         informe["modelos"] = list(getattr(modelos, "versiones", []))
         del mapas, observaciones, vistas
 
-    for clave in ("completado", "splats"):
-        if clave in etapas:
-            progreso.etapa(clave)
-            avisos.append(f"La etapa «{ETAPAS[clave]}» todavía no está implementada; se omite.")
+    if "completado" in etapas:
+        progreso.etapa("completado")
+        avisos.append(f"La etapa «{ETAPAS['completado']}» todavía no está implementada; se omite.")
+
+    if "splats" in etapas:
+        progreso.etapa("splats")
+        try:
+            from . import splats
+            informe["splats"] = splats.generar(entrada, base, salida / "splats" / "escena.splat",
+                                               progreso.avance, avisos)
+        except Exception as error:   # la vista fotorrealista es opcional: no debe tumbar el resto
+            avisos.append(f"No se pudo entrenar el Gaussian Splatting: {error}")
 
     progreso.etapa("empaquetado")
     objetos = empaquetar(escaneo, instancias, entradas, salida, segmentar="vocabulario" in etapas)

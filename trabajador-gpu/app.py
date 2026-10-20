@@ -31,8 +31,9 @@ pesos = modal.Volume.from_name("escaner-lidar-pesos", create_if_missing=True)
 pruebas = modal.Volume.from_name("escaner-lidar-pruebas", create_if_missing=True)
 
 imagen_gpu = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git", "libgl1", "libglib2.0-0")
+    # Imagen de CUDA con compilador (nvcc): gsplat no publica binarios para PyTorch 2.8 y hay que compilarlo.
+    modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.12")
+    .apt_install("git", "libgl1", "libglib2.0-0", "build-essential", "ninja-build")
     .pip_install("torch==2.8.0", "torchvision==0.23.0", index_url="https://download.pytorch.org/whl/cu128")
     .pip_install(
         "numpy==2.2.6", "scipy==1.15.3", "pillow==11.3.0",
@@ -42,6 +43,9 @@ imagen_gpu = (
     # SAM 2 solo se publica como código fuente; sin la extensión CUDA opcional (no hace falta para imágenes).
     .env({"SAM2_BUILD_CUDA": "0", "HF_HOME": "/pesos/hf", "TOKENIZERS_PARALLELISM": "false"})
     .pip_install("sam2==1.1.0", extra_options="--no-build-isolation")
+    # Gaussian Splatting (etapa F): se compila para las GPU que usamos (A10G = 8.6, L4 = 8.9, L40S = 8.9).
+    .env({"TORCH_CUDA_ARCH_LIST": "8.6;8.9", "MAX_JOBS": "8"})
+    .pip_install("gsplat==1.5.3", extra_options="--no-build-isolation --no-binary gsplat")
     .add_local_python_source("escaner_ia")
 )
 
@@ -103,7 +107,8 @@ SUBIR = ("malla_color.ply", "escena.json", "textura.jpg", "edicion.json")
 
 
 @app.local_entrypoint()
-def prueba(carpeta: str, salida: str = "", sin_fotos: bool = False, vocabulario: str = ""):
+def prueba(carpeta: str, salida: str = "", sin_fotos: bool = False, vocabulario: str = "", splats: bool = False,
+           sin_segmentacion: bool = False):
     """Procesa la carpeta de un escaneo del iPhone y deja el resultado en <carpeta>/ia (o en --salida)."""
     origen = Path(carpeta).expanduser().resolve()
     if not origen.is_dir():
@@ -113,6 +118,7 @@ def prueba(carpeta: str, salida: str = "", sin_fotos: bool = False, vocabulario:
 
     archivos = [origen / n for n in SUBIR if (origen / n).is_file()]
     archivos += sorted((origen / "objetos").glob("*.ply")) + sorted((origen / "fotos_clave").glob("*"))
+    archivos += sorted((origen / "fotogramas").glob("*"))
     if not any(a.name in ("malla_color.ply", "escena.json") for a in archivos):
         raise SystemExit("La carpeta no parece un escaneo: falta malla_color.ply o escena.json")
     total = sum(a.stat().st_size for a in archivos) / 1e6
@@ -121,7 +127,8 @@ def prueba(carpeta: str, salida: str = "", sin_fotos: bool = False, vocabulario:
         for a in archivos:
             lote.put_file(str(a), f"/{remoto}/entrada/{a.relative_to(origen).as_posix()}")
 
-    opciones = {"segmentacion": True, "vistas": "sinteticas" if sin_fotos else "auto",
+    opciones = {"segmentacion": not sin_segmentacion, "splats": splats,
+                "vistas": "sinteticas" if sin_fotos else "auto",
                 "vocabulario": [p.strip() for p in vocabulario.split(",") if p.strip()]}
     informe = procesar_prueba.remote(remoto, opciones)
 
@@ -136,6 +143,6 @@ def prueba(carpeta: str, salida: str = "", sin_fotos: bool = False, vocabulario:
             for trozo in pruebas.read_file(entrada.path):
                 f.write(trozo)
     pruebas.remove_file(f"/{remoto}", recursive=True)
-    print(json.dumps({k: informe.get(k) for k in ("vistas", "mascaras2d", "instancias", "objetos", "tiempos", "avisos")},
+    print(json.dumps({k: informe.get(k) for k in ("vistas", "mascaras2d", "instancias", "objetos", "splats", "tiempos", "avisos")},
                      ensure_ascii=False, indent=2))
     print(f"Listo: {destino / 'escena.json'}")
