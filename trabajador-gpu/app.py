@@ -33,7 +33,10 @@ pruebas = modal.Volume.from_name("escaner-lidar-pruebas", create_if_missing=True
 imagen_gpu = (
     # Imagen de CUDA con compilador (nvcc): gsplat no publica binarios para PyTorch 2.8 y hay que compilarlo.
     modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.12")
-    .apt_install("git", "libgl1", "libglib2.0-0", "build-essential", "ninja-build")
+    # clang: el Python de Modal se compiló con clang y enlaza las extensiones con clang++.
+    .apt_install("git", "libgl1", "libglib2.0-0", "build-essential", "ninja-build", "clang")
+    # El Python de esta imagen trae pip antiguo y sin `wheel`: hacen falta para compilar SAM 2 y gsplat.
+    .pip_install("pip>=24", "setuptools>=70", "wheel", "ninja")
     .pip_install("torch==2.8.0", "torchvision==0.23.0", index_url="https://download.pytorch.org/whl/cu128")
     .pip_install(
         "numpy==2.2.6", "scipy==1.15.3", "pillow==11.3.0",

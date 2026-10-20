@@ -107,7 +107,7 @@ def entrenar(vistas, base: ply.Malla, p: ParametrosSplats, avance) -> dict:
         elegidos = np.random.default_rng(0).choice(len(puntos), p.max_puntos_iniciales, replace=False)
         puntos, colores = puntos[elegidos], colores[elegidos]
     distancias, _ = cKDTree(puntos).query(puntos, k=4)
-    radio = np.clip(distancias[:, 1:].mean(1), 1e-3, 0.1)
+    radio = np.clip(distancias[:, 1:].mean(1), 1e-3, 0.1).astype(np.float32)   # gsplat trabaja en float32
 
     n = len(puntos)
     cuat = torch.randn(n, 4)
