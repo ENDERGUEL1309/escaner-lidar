@@ -56,7 +56,7 @@ final class CloudEnhancement {
     var includeSplats = true
 
     /// La vista fotorrealista ya descargada, si la hay.
-    var splatFile: URL? { SplatViewerView.file(in: folder) }
+    var splatFile: URL? { SplatSceneModel.file(in: folder) }
 
     var uploadSizeText: String {
         let bytes = CloudClient.filesToUpload(in: folder).reduce(Int64(0)) { total, path in
@@ -276,9 +276,9 @@ struct CloudEnhancementSection: View {
 
     @ViewBuilder
     private var splatLink: some View {
-        if let file = model.splatFile {
+        if model.splatFile != nil {
             NavigationLink {
-                SplatViewerView(file: file)
+                SplatViewerView(folder: model.folder)
             } label: {
                 Label("Vista fotorrealista", systemImage: "camera.filters")
                     .foregroundStyle(.purple)
