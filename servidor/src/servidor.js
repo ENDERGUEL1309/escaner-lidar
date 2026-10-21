@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import * as almacen from './almacen.js';
 import { ErrorHttp } from './almacen.js';
 import { firmaValida, textoEntrada, textoSalida } from './firmas.js';
+import { trabajoPara } from './modal.js';
 
 // Quién procesa: el trabajador simulado (por defecto, sin GPU) o la GPU en Modal (trabajador-gpu/).
 const GPU_PROVEEDOR = (process.env.GPU_PROVEEDOR || 'simulado').toLowerCase();
@@ -97,6 +98,10 @@ function urlDe(id, zona, ruta) {
 /// Vista pública de un escaneo (lo que devuelve GET /api/escaneos/:id).
 function vista(e) {
   const pendientes = e.archivos.filter((a) => !a.subido).map((a) => a.ruta);
+  let etapa = e.etapa;
+  if (e.opciones?.tipo === 'malla_pc' && e.estado === 'en_cola' && !pcConectado()) {
+    etapa = 'Esperando a tu PC (no está conectado: enciéndelo y arranca el trabajador)';
+  }
   return {
     id: e.id,
     nombre: e.nombre,
@@ -104,7 +109,7 @@ function vista(e) {
     actualizado: e.actualizado,
     estado: e.estado,
     progreso: e.progreso,
-    etapa: e.etapa,
+    etapa,
     error: e.error,
     opciones: e.opciones,
     archivos: { total: e.archivos.length, pendientes },
@@ -141,6 +146,8 @@ function validarManifiesto(m) {
 
   const o = m.opciones ?? {};
   const opciones = {
+    // 'ia': objetos con IA en la GPU (Modal o simulado). 'malla_pc': malla de alta calidad en el PC del usuario.
+    tipo: o.tipo === 'malla_pc' ? 'malla_pc' : 'ia',
     segmentacion: o.segmentacion !== false,
     completado: o.completado === true,
     splats: o.splats === true,
@@ -274,10 +281,42 @@ async function procesarEscaneo(req, res, id) {
     e.estado = 'en_cola';
     e.progreso = 0;
     e.error = null;
-    e.etapa = 'En cola';
+    e.etapa = e.opciones?.tipo === 'malla_pc' ? 'Esperando a tu PC' : 'En cola';
   });
-  trabajador.encolar(id);
+  // Los trabajos del PC no se despachan: el trabajador del PC los toma con POST /api/pc/tomar.
+  if (e.opciones?.tipo !== 'malla_pc') trabajador.encolar(id);
   enviarJSON(res, 202, vista(e));
+}
+
+// ------------------------------------------------------------------------------------------------ trabajador del PC
+// El PC del usuario (trabajador-gpu/trabajador_pc.py) pregunta cada pocos segundos si hay trabajo. Se identifica
+// con el API_TOKEN; la descarga, la subida y los avisos de progreso usan las mismas URLs firmadas que Modal.
+
+const PC_CONECTADO_MS = 2 * 60 * 1000;
+let ultimaVisitaPC = 0;
+const pcConectado = () => Date.now() - ultimaVisitaPC < PC_CONECTADO_MS;
+
+async function tomarTrabajoPC(req, res) {
+  ultimaVisitaPC = Date.now();
+  const candidatos = (await almacen.listar())
+    .filter((e) => e.opciones?.tipo === 'malla_pc' && e.estado === 'en_cola')
+    .sort((a, b) => Date.parse(a.creado) - Date.parse(b.creado));
+  for (const candidato of candidatos) {
+    let tomado = false;
+    const e = await almacen.actualizar(candidato.id, (e) => {
+      if (e.estado !== 'en_cola') return;
+      e.estado = 'procesando';
+      e.etapa = 'Descargando en tu PC';
+      e.progreso = 0;
+      tomado = true;
+    });
+    if (!tomado) continue;
+    await rm(path.join(almacen.carpeta(e.id), 'salida'), { recursive: true, force: true });
+    console.log(`[pc] ${e.id} (${e.nombre}) tomado por el PC`);
+    return enviarJSON(res, 200, { ...trabajoPara(e), nombre: e.nombre });
+  }
+  res.writeHead(204);
+  res.end();
 }
 
 /// Aviso de progreso del trabajador con GPU (el simulado no lo usa: escribe directamente en el almacén).
@@ -354,7 +393,7 @@ async function enrutar(req, res) {
 
   if (partes[0] !== 'api') throw new ErrorHttp(404, 'No encontrado');
   if (partes[1] === 'salud' && m === 'GET') {
-    return enviarJSON(res, 200, { ok: true, autenticacion: Boolean(TOKEN), gpu: GPU_PROVEEDOR });
+    return enviarJSON(res, 200, { ok: true, autenticacion: Boolean(TOKEN), gpu: GPU_PROVEEDOR, pc: pcConectado() });
   }
   if (partes[1] === 'interno' && partes[2] === 'trabajos') {
     const [, , , idTrabajo, zona, ...rutaInterna] = partes;
@@ -368,6 +407,13 @@ async function enrutar(req, res) {
     throw new ErrorHttp(404, 'No encontrado');
   }
   if (!autorizado(req, url)) throw new ErrorHttp(401, 'Falta el token (Authorization: Bearer … o ?token=…)');
+  if (partes[1] === 'pc') {
+    if (partes[2] === 'tomar' && m === 'POST') return tomarTrabajoPC(req, res);
+    if (partes[2] === 'estado' && m === 'GET') {
+      return enviarJSON(res, 200, { conectado: pcConectado(), ultimaVisita: ultimaVisitaPC ? new Date(ultimaVisitaPC).toISOString() : null });
+    }
+    throw new ErrorHttp(404, 'No encontrado');
+  }
   if (partes[1] !== 'escaneos') throw new ErrorHttp(404, 'No encontrado');
 
   const [, , id, accion, ...resto] = partes;

@@ -80,6 +80,6 @@ export function encolar(id) {
 /// Al arrancar, reenvía lo que se quedó en cola. Lo que ya está `procesando` sigue en Modal y avisará solo.
 export async function reanudarPendientes() {
   for (const e of await almacen.listar()) {
-    if (e.estado === 'en_cola') encolar(e.id);
+    if (e.estado === 'en_cola' && e.opciones?.tipo !== 'malla_pc') encolar(e.id);   // los del PC los toma el PC
   }
 }

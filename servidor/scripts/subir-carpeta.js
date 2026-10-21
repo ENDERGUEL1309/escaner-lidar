@@ -1,6 +1,7 @@
 // Sube la carpeta de un escaneo real (copiada del iPhone desde la app Archivos) y la procesa.
-//   npm run subir -- "C:\ruta\Entorno_2026-10-20_18-04-11" [--completado] [--splats] [--sin-fotos]
+//   npm run subir -- "C:\ruta\Entorno_2026-10-20_18-04-11" [--completado] [--splats] [--sin-fotos] [--pc]
 //   --sin-fotos: la IA usa imágenes sintéticas de la malla aunque haya fotos clave (modo de prueba).
+//   --pc: malla de alta calidad en el PC (la toma trabajador-gpu/trabajador_pc.py).
 
 import path from 'node:path';
 import { subirCarpeta } from './cliente.js';
@@ -19,6 +20,7 @@ try {
     token: process.env.API_TOKEN,
     carpeta: path.resolve(carpeta),
     opciones: {
+      tipo: argumentos.includes('--pc') ? 'malla_pc' : 'ia',
       completado: argumentos.includes('--completado'),
       splats: argumentos.includes('--splats'),
       vistas: argumentos.includes('--sin-fotos') ? 'sinteticas' : 'auto',

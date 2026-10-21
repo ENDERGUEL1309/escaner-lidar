@@ -34,6 +34,10 @@ struct ExportedFilesView: View {
                 if CloudEnhancement.isAvailable(for: viewerFolder) {
                     CloudEnhancementSection(folder: viewerFolder)
                 }
+
+                if PCReconstruction.isAvailable(for: viewerFolder) {
+                    PCReconstructionSection(folder: viewerFolder)
+                }
             }
 
             if !objects.isEmpty {

@@ -1,7 +1,7 @@
 @echo off
-rem Compila e instala gsplat 1.5.3 desde el código fuente para la GPU de este PC (necesita CUDA 12.8 y Visual Studio 2022).
-rem La rama principal de gsplat no compila con MSVC; la versión 1.5.3 sí, y compilada así no usa la compilación al vuelo
-rem de PyTorch (que cambió en PyTorch 2.11).
+rem Compila e instala gsplat 1.5.3 desde el codigo fuente para la GPU de este PC (necesita CUDA 12.8 y Visual Studio 2022).
+rem La rama principal de gsplat no compila con MSVC; la version 1.5.3 si, y compilada asi no usa la compilacion al vuelo
+rem de PyTorch (que cambio en PyTorch 2.11).
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
 set "CUDA_HOME=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
 set "PATH=%~dp0.venv-splat\Scripts;%CUDA_HOME%\bin;%PATH%"

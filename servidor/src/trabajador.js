@@ -37,6 +37,7 @@ export function encolar(id) {
 /// Al arrancar, retoma los trabajos que quedaron a medias (como haría el despachador con Postgres).
 export async function reanudarPendientes() {
   for (const e of await almacen.listar()) {
+    if (e.opciones?.tipo === 'malla_pc') continue;   // los toma el trabajador del PC
     if (e.estado === 'en_cola' || e.estado === 'procesando') encolar(e.id);
   }
 }

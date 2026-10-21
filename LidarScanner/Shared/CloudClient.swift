@@ -120,7 +120,8 @@ struct CloudClient {
     }
 
     /// Sube la carpeta del escaneo y lanza el procesado. Devuelve el identificador del trabajo.
-    func upload(folder: URL, splats: Bool, progress: @escaping (Double) -> Void) async throws -> String {
+    /// `tipo`: "ia" (objetos con IA en la GPU de la nube) o "malla_pc" (malla de alta calidad en el PC del usuario).
+    func upload(folder: URL, splats: Bool, tipo: String = "ia", progress: @escaping (Double) -> Void) async throws -> String {
         let files = Self.filesToUpload(in: folder)
         guard files.contains(where: { $0 == "malla_color.ply" || $0 == "escena.json" }) else { throw CloudError.nothingToUpload }
 
@@ -135,7 +136,7 @@ struct CloudClient {
         let manifest: [String: Any] = [
             "version": 1,
             "nombre": folder.lastPathComponent,
-            "opciones": ["segmentacion": true, "splats": splats, "vistas": "auto"],
+            "opciones": ["tipo": tipo, "segmentacion": true, "splats": splats, "vistas": "auto"],
             "archivos": entries,
         ]
         let created: Created = try decode(try await request("POST", "/api/escaneos",

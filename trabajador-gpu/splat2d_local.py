@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 from pathlib import Path
 
@@ -24,6 +25,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).parent))
 HERRAMIENTAS = Path.home() / "Herramientas"
 
 
@@ -106,6 +108,46 @@ def profundidad_lidar(vertices: torch.Tensor, w2c: np.ndarray, K: np.ndarray, an
     return prof[0, 0]
 
 
+def alinear_con_lidar(origen: Path, trabajo: Path, ruta: Path, registro=print) -> np.ndarray:
+    """Transformación del modelo COLMAP al mundo de la malla LiDAR: similitud que lleva las cámaras ajustadas a las
+    de ARKit (corrige la escala libre del ajuste de haces) y ICP de la nube densa contra la malla LiDAR (corrige los
+    centímetros y grados de diferencia entre las poses de ARKit y la fusión de la app)."""
+    from scipy.spatial import cKDTree
+
+    from escaner_ia.fotogrametria import similitud_arkit
+
+    camaras = json.loads((trabajo / "camaras.json").read_text())
+    T = similitud_arkit(trabajo / "sparse" / "ajustada" / "images.txt", camaras)
+    densa, _ = leer_ply(trabajo / "dense" / "fused.ply")
+    lidar, _ = leer_ply(origen / "malla_color.ply")
+    rng = np.random.default_rng(0)
+    fuente = densa[rng.choice(len(densa), min(60_000, len(densa)), replace=False)].astype(np.float64)
+    fuente = fuente @ T[:3, :3].T + T[:3, 3]
+    arbol = cKDTree(lidar[rng.choice(len(lidar), min(500_000, len(lidar)), replace=False)])
+    d0 = arbol.query(fuente)[0]
+    R, t = np.eye(3), np.zeros(3)
+    for _ in range(40):
+        p = fuente @ R.T + t
+        d, idx = arbol.query(p)
+        sel = d < max(0.02, np.percentile(d, 60))
+        a, b = p[sel], arbol.data[idx[sel]]
+        ma, mb = a.mean(0), b.mean(0)
+        U, _, Vt = np.linalg.svd((a - ma).T @ (b - mb))
+        Ri = Vt.T @ np.diag([1, 1, np.sign(np.linalg.det(Vt.T @ U.T))]) @ U.T
+        R, t = Ri @ R, Ri @ t + mb - Ri @ ma
+    d1 = arbol.query(fuente @ R.T + t)[0]
+    C = np.eye(4)
+    C[:3, :3], C[:3, 3] = R, t
+    T = C @ T
+    escala = np.cbrt(np.linalg.det(T[:3, :3]))
+    registro(f"Alineación con el LiDAR: escala {escala:.4f}, giro ICP {np.degrees(np.arccos(min(1, (np.trace(R) - 1) / 2))):.2f}°, "
+             f"distancia mediana {np.median(d0) * 100:.1f} → {np.median(d1) * 100:.1f} cm")
+    ruta.parent.mkdir(exist_ok=True)
+    ruta.write_text(json.dumps({"descripcion": "similitud 4x4: modelo COLMAP tras el ajuste de haces -> mundo "
+                                               "ARKit/LiDAR (Y arriba)", "matriz": T.tolist()}, indent=1))
+    return T
+
+
 # ----------------------------------------------------------------------------------------------- utilidades
 
 def ssim(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -174,7 +216,10 @@ def main():
         registro_txt.flush()
 
     dev = torch.device("cuda")
-    T = np.array(json.loads((origen / "fotogrametria" / "colmap_a_lidar.json").read_text())["matriz"])
+    ruta_T = origen / "fotogrametria" / "colmap_a_lidar.json"
+    if not ruta_T.exists():
+        alinear_con_lidar(origen, trabajo, ruta_T, registro)
+    T = np.array(json.loads(ruta_T.read_text())["matriz"])
     vistas = cargar_vistas(trabajo, T, a.lado)
     registro(f"{len(vistas)} vistas a {vistas[0]['ancho']}x{vistas[0]['alto']} (fotos clave) y "
              f"{vistas[-1]['ancho']}x{vistas[-1]['alto']} (fotogramas)")
