@@ -68,6 +68,12 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         .appendingPathComponent("Fotogramas", isDirectory: true)
     @ObservationIgnored private var linearSpeed: Float = 0     // m/s, suavizada
     @ObservationIgnored private var angularSpeed: Float = 0    // rad/s, suavizada
+    /// Corrección de la deriva de ARKit (se multiplica por la izquierda a sus poses). La calcula la cola de
+    /// procesado alineando cada fotograma con el modelo; el hilo principal guarda una copia para las fotos.
+    @ObservationIgnored private var queueCorrection = matrix_identity_float4x4    // solo desde `queue`
+    @ObservationIgnored private var poseCorrection = matrix_identity_float4x4     // solo desde main
+    /// Fotogramas tras «Escanear aquí» en los que se busca la deriva acumulada al caminar (ajuste más amplio).
+    @ObservationIgnored private var relocalizeFrames = 0                          // solo desde main
 
     static var isSupported: Bool {
         ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
@@ -93,6 +99,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let folder = keyframeFolder
         queue.async { [weak self, keyframes] in
             self?.volume = TSDFVolume(voxelSize: voxelSize, maxBlocks: maxBlocks)
+            self?.queueCorrection = matrix_identity_float4x4
             keyframes.reset()
             try? FileManager.default.removeItem(at: folder)
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -104,6 +111,8 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         detectedObjects = []
         lastKeyframeTransform = nil
         keyframeSpacing = 1
+        poseCorrection = matrix_identity_float4x4
+        relocalizeFrames = 0
         splatFrameCount = 0
         lastSplatFrameTransform = nil
         let frames = splatFolder
@@ -132,6 +141,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     func scanHere() {
         guard phase == .moving else { return }
         phase = .scanning
+        relocalizeFrames = 12   // ~1 s: alinear la nueva ubicación con lo ya escaneado antes de fusionar
         markStation()
     }
 
@@ -204,7 +214,8 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let tooFast = updateMotion(frame)
         if tooFast != isTooFast { isTooFast = tooFast }
 
-        if phase == .scanning {
+        // Mientras se corrige la deriva de la nueva ubicación no se toman fotos: saldrían con la pose sin corregir.
+        if phase == .scanning, relocalizeFrames == 0 {
             considerKeyframe(frame, session: session)
             if settings.captureSplatFrames, !tooFast { considerSplatFrame(frame) }
         } else {
@@ -219,15 +230,19 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         // en lugar de retener ARFrames (lo que bloquearía la cámara).
         isIntegrating = true
         let settings = self.settings
+        let relocalizing = relocalizeFrames > 0
+        if relocalizing { relocalizeFrames -= 1 }
         queue.async { [weak self] in
             guard let self else { return }
-            self.integrate(frame, settings: settings)
+            self.integrate(frame, settings: settings, relocalizing: relocalizing)
             let voxels = self.volume.blockCount * 512
             let full = self.volume.isFull
+            let correction = self.queueCorrection
             DispatchQueue.main.async {
                 self.isIntegrating = false
                 self.voxelCount = voxels
                 self.isVolumeFull = full
+                self.poseCorrection = correction
             }
         }
     }
@@ -251,9 +266,11 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let camera = frame.camera
         let timestamp = frame.timestamp
         let index = splatFrameCount
+        let correction = poseCorrection
         splatQueue.async { [weak self] in
             guard let self else { return }
-            let saved = self.saveSplatFrame(buffer: buffer, camera: camera, timestamp: timestamp, index: index)
+            let saved = self.saveSplatFrame(buffer: buffer, camera: camera, correction: correction,
+                                            timestamp: timestamp, index: index)
             DispatchQueue.main.async {
                 self.isSavingSplatFrame = false
                 if saved { self.splatFrameCount += 1 }
@@ -262,7 +279,8 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     }
 
     /// Reduce el fotograma a 1280 px de ancho y lo guarda en JPEG con su cámara (intrínsecos escalados).
-    private func saveSplatFrame(buffer: CVPixelBuffer, camera: ARCamera, timestamp: TimeInterval, index: Int) -> Bool {
+    private func saveSplatFrame(buffer: CVPixelBuffer, camera: ARCamera, correction: simd_float4x4,
+                                timestamp: TimeInterval, index: Int) -> Bool {
         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
         let scale = min(1, 1280 / Float(width))
         let name = String(format: "%04d.jpg", index)
@@ -276,7 +294,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
             return false
         }
         let resolution = camera.imageResolution
-        let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
+        let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: correction * camera.transform)
             .scaled(sx: Float(width) / Float(resolution.width) * scale, sy: Float(height) / Float(resolution.height) * scale)
         let m = model.cameraToWorld
         splatRecords.append(CloudExport.Photo(
@@ -350,7 +368,8 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         }
         guard let sceneDepth = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
         let snapshot = Self.copyDepth(sceneDepth)
-        let depthCamera = CameraModel(intrinsics: frame.camera.intrinsics, cameraToWorld: transform)
+        let correction = poseCorrection
+        let depthCamera = CameraModel(intrinsics: frame.camera.intrinsics, cameraToWorld: correction * transform)
             .scaled(sx: Float(snapshot.width) / Float(frame.camera.imageResolution.width),
                     sy: Float(snapshot.height) / Float(frame.camera.imageResolution.height))
 
@@ -360,7 +379,8 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let store: (CVPixelBuffer, ARCamera, TimeInterval) -> Void = { [weak self] buffer, camera, time in
             guard let self else { return }
             self.queue.async {
-                self.storeKeyframe(buffer: buffer, camera: camera, depth: snapshot, depthCamera: depthCamera, timestamp: time)
+                self.storeKeyframe(buffer: buffer, camera: camera, correction: correction, depth: snapshot,
+                                   depthCamera: depthCamera, timestamp: time)
                 let count = self.keyframes.count
                 let spacing = pow(1.5, Float(self.keyframes.decimations))
                 DispatchQueue.main.async {
@@ -384,13 +404,13 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         }
     }
 
-    private func storeKeyframe(buffer: CVPixelBuffer, camera: ARCamera,
+    private func storeKeyframe(buffer: CVPixelBuffer, camera: ARCamera, correction: simd_float4x4,
                                depth: (depth: [Float], confidence: [UInt8], width: Int, height: Int),
                                depthCamera: CameraModel, timestamp: TimeInterval) {
         let width = CVPixelBufferGetWidth(buffer)
         let height = CVPixelBufferGetHeight(buffer)
         let resolution = camera.imageResolution
-        let fullCamera = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
+        let fullCamera = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: correction * camera.transform)
             .scaled(sx: Float(width) / Float(resolution.width), sy: Float(height) / Float(resolution.height))
 
         let step = max(1, Int((Float(width) / 1000).rounded()))
@@ -481,17 +501,45 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         return out
     }
 
-    private func integrate(_ frame: ARFrame, settings: ScanSettings) {
+    /// `relocalizing`: primeros fotogramas en una ubicación nueva; se admite una corrección mayor (la deriva de
+    /// la caminata) y, si no se consigue alinear, el fotograma no se fusiona para no crear paredes dobles.
+    private func integrate(_ frame: ARFrame, settings: ScanSettings, relocalizing: Bool) {
         guard case .normal = frame.camera.trackingState,
               let sceneDepth = frame.smoothedSceneDepth ?? frame.sceneDepth,
               let rgb = ImageSampler.downsampledRGB(from: frame.capturedImage, step: 3) else { return }
 
         let imageSize = frame.camera.imageResolution
-        let baseCamera = CameraModel(intrinsics: frame.camera.intrinsics, cameraToWorld: frame.camera.transform)
         let raw = Self.copyDepth(sceneDepth)
-        let depthCamera = baseCamera.scaled(sx: Float(raw.width) / Float(imageSize.width),
-                                            sy: Float(raw.height) / Float(imageSize.height))
         let depth = Self.removeFlyingPixels(raw.depth, width: raw.width, height: raw.height)
+        let sx = Float(raw.width) / Float(imageSize.width), sy = Float(raw.height) / Float(imageSize.height)
+        let arkitPose = frame.camera.transform
+
+        // Alinear con lo ya escaneado (corrige la deriva de ARKit). Hace falta un modelo con algo de superficie.
+        if volume.blockCount > 200 {
+            let local = CameraModel(intrinsics: frame.camera.intrinsics, cameraToWorld: matrix_identity_float4x4)
+                .scaled(sx: sx, sy: sy)
+            var points: [SIMD3<Float>] = []
+            points.reserveCapacity(1600)
+            for y in stride(from: 3, to: raw.height, by: 6) {
+                for x in stride(from: 3, to: raw.width, by: 6) {
+                    let i = y * raw.width + x
+                    let d = depth[i]
+                    guard d > 0.2, d < 3.5, raw.confidence[i] >= UInt8(ARConfidenceLevel.high.rawValue) else { continue }
+                    points.append(local.unproject(u: Float(x) + 0.5, v: Float(y) + 0.5, depth: d))
+                }
+            }
+            let pose = queueCorrection * arkitPose
+            if let result = PoseRefiner.refine(points: points, pose: pose, volume: volume,
+                                               maxTranslation: relocalizing ? 0.15 : 0.03,
+                                               maxRotation: relocalizing ? 0.14 : 0.035) {
+                queueCorrection = result.correction * queueCorrection
+            } else if relocalizing {
+                return   // aún no alineado con la ubicación anterior: mejor no fusionar este fotograma
+            }
+        }
+
+        let baseCamera = CameraModel(intrinsics: frame.camera.intrinsics, cameraToWorld: queueCorrection * arkitPose)
+        let depthCamera = baseCamera.scaled(sx: sx, sy: sy)
 
         // Fusión volumétrica: cada lectura LiDAR refina la distancia a la superficie y su color.
         volume.integrate(depth: depth, confidence: raw.confidence, width: raw.width, height: raw.height,
@@ -520,8 +568,11 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         }
 
         report("Eliminando ruido", 0.1)
+        let maxEdge = settings.voxelSize * 3
+        MeshCleaner.removeStretchedTriangles(&mesh, maxEdge: maxEdge)
         MeshCleaner.removeSmallComponents(&mesh, minTriangles: 300)
         MeshCleaner.smooth(&mesh, iterations: 4)
+        MeshCleaner.removeStretchedTriangles(&mesh, maxEdge: maxEdge)
         guard !mesh.isEmpty else {
             try? FileManager.default.removeItem(at: folder)
             throw ScanError.nothingCaptured

@@ -129,6 +129,38 @@ final class TSDFVolume {
         }
     }
 
+    // MARK: - Muestreo (para alinear fotogramas con el modelo)
+
+    /// Distancia con signo (metros) y su gradiente en un punto, por interpolación trilineal de los 8 vóxeles
+    /// vecinos. `nil` si alguno no está observado con al menos `minWeight`.
+    func sample(_ p: SIMD3<Float>, minWeight: Float = 2) -> (distance: Float, gradient: SIMD3<Float>)? {
+        let g = p / voxelSize - 0.5               // centros de vóxel en coordenadas enteras
+        let base = g.rounded(.down)
+        let f = g - base
+        let i0 = SIMD3<Int32>(Int32(base.x), Int32(base.y), Int32(base.z))
+
+        var s = [Float](repeating: 0, count: 8)
+        for c in 0..<8 {
+            let idx = i0 &+ SIMD3<Int32>(Int32(c & 1), Int32((c >> 1) & 1), Int32((c >> 2) & 1))
+            guard let block = blocks[Self.key(SIMD3(idx.x >> 3, idx.y >> 3, idx.z >> 3))] else { return nil }
+            let v = block.voxels[Int(idx.x & 7) + Int(idx.y & 7) * 8 + Int(idx.z & 7) * 64]
+            guard Float(v.weight) >= minWeight else { return nil }
+            s[c] = Float(v.sdf) * truncation
+        }
+        let (fx, fy, fz) = (f.x, f.y, f.z)
+        // Interpolación trilineal: primero en x, luego en y, luego en z.
+        let x00 = s[0] + (s[1] - s[0]) * fx, x10 = s[2] + (s[3] - s[2]) * fx
+        let x01 = s[4] + (s[5] - s[4]) * fx, x11 = s[6] + (s[7] - s[6]) * fx
+        let y0 = x00 + (x10 - x00) * fy, y1 = x01 + (x11 - x01) * fy
+        let value = y0 + (y1 - y0) * fz
+        // Derivadas analíticas de la misma interpolación (por metro).
+        let dx = ((s[1] - s[0]) * (1 - fy) * (1 - fz) + (s[3] - s[2]) * fy * (1 - fz)
+                  + (s[5] - s[4]) * (1 - fy) * fz + (s[7] - s[6]) * fy * fz)
+        let dy = ((x10 - x00) * (1 - fz) + (x11 - x01) * fz)
+        let dz = y1 - y0
+        return (value, SIMD3(dx, dy, dz) / voxelSize)
+    }
+
     // MARK: - Relleno de huecos
 
     /// Extiende la distancia con signo a los vóxeles no observados que están rodeados de vóxeles observados.

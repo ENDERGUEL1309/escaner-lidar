@@ -34,6 +34,21 @@ enum MeshCleaner {
         mesh = mesh.submesh(triangles: keep)
     }
 
+    /// Quita los triángulos con algún lado más largo que `maxEdge`. En los bordes de lo observado la fusión deja
+    /// triángulos largos y finos (y la textura se estira sobre ellos): son los "pinchos" de los bordes.
+    static func removeStretchedTriangles(_ mesh: inout ColoredMesh, maxEdge: Float) {
+        let limit = maxEdge * maxEdge
+        let keep = (0..<mesh.triangleCount).filter { t in
+            let a = mesh.positions[Int(mesh.indices[t * 3])]
+            let b = mesh.positions[Int(mesh.indices[t * 3 + 1])]
+            let c = mesh.positions[Int(mesh.indices[t * 3 + 2])]
+            return simd_distance_squared(a, b) <= limit && simd_distance_squared(b, c) <= limit
+                && simd_distance_squared(a, c) <= limit
+        }
+        guard keep.count < mesh.triangleCount, !keep.isEmpty else { return }
+        mesh = mesh.submesh(triangles: keep)
+    }
+
     /// Suavizado de Taubin (λ/μ): quita el "granulado" sin encoger la malla como haría un suavizado simple.
     static func smooth(_ mesh: inout ColoredMesh, iterations: Int, lambda: Float = 0.5, mu: Float = -0.53) {
         let n = mesh.positions.count

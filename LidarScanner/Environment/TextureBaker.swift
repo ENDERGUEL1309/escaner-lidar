@@ -237,7 +237,8 @@ enum TextureBaker {
         progress(0.6)
 
         // Copia de píxeles: cada foto se decodifica una sola vez, para todos sus parches.
-        var atlas = [UInt8](repeating: 0, count: S * S * 3)
+        // Gris neutro de fondo: si algún borde de parche toma un píxel de fuera, no sale una mancha negra.
+        var atlas = [UInt8](repeating: 128, count: S * S * 3)
         var chartsByView = [[Int]](repeating: [], count: views.count)
         for c in 0..<chartCount { chartsByView[chartView[c]].append(c) }
         let pad = padding
