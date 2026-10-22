@@ -596,6 +596,10 @@ def exportar_escena(origen, muebles, de_pieza, suelo, salida, paredes=(), giro=0
         q_todos = pb[:, :2] @ rot_z(-giro)[:2, :2].T
         alto_todos = pb[:, 2] - suelo
         centro_hab = np.median(q_todos, 0)
+        # Para el color de las paredes no valen los puntos de los muebles pegados a ellas (sombras del escritorio…).
+        de_mueble = np.zeros(len(pb), bool)
+        for pieza in de_pieza.values():
+            de_mueble[pieza["indices"]] = True
         techo_alto = float(np.percentile(alto_todos, 99.5)) - 0.05
         v_c, f_c, c_c = [], [], []
 
@@ -610,6 +614,7 @@ def exportar_escena(origen, muebles, de_pieza, suelo, salida, paredes=(), giro=0
 
         for eje, pos, lo_t, hi_t in paredes:
             cerca = (np.abs(q_todos[:, eje] - pos) < 0.03) & (q_todos[:, 1 - eje] > lo_t) & (q_todos[:, 1 - eje] < hi_t)
+            cerca &= ~de_mueble
             if hi_t - lo_t < 1.5 or cerca.sum() < 200:   # los tabiques cortos tienen dos lados «interiores»
                 continue
             if np.percentile(alto_todos[cerca], 5) > 0.8 or np.percentile(alto_todos[cerca], 95) < techo_alto - 0.5:
