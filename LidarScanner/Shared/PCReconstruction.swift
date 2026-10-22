@@ -233,6 +233,8 @@ struct MeshPreviewView: View {
 
         let geometry = ModelExporter.makeGeometry(mesh)
         geometry.firstMaterial?.lightingModel = .constant
+        // Las caras miran hacia dentro de la habitación: desde fuera, las paredes cercanas no tapan (casa de muñecas).
+        geometry.firstMaterial?.isDoubleSided = false
         let node = SCNNode(geometry: geometry)
         let scene = SCNScene()
         scene.rootNode.addChildNode(node)

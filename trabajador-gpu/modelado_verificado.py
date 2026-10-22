@@ -542,7 +542,7 @@ def color_en(color, alto, desde, hasta):
     return np.median(color[sel], 0).astype(np.uint8) if sel.sum() > 50 else np.array([150, 150, 150], np.uint8)
 
 
-def exportar_escena(origen, muebles, de_pieza, suelo, salida):
+def exportar_escena(origen, muebles, de_pieza, suelo, salida, paredes=(), giro=0.0):
     """Escena para la app (mundo ARKit, Y arriba): la malla escaneada sin los muebles reconocidos + sus modelos
     limpios con el color real de cada parte. Lo que hay encima de los muebles (monitor, PC…) sigue escaneado."""
     from splat2d_local import guardar_malla_ply
@@ -589,6 +589,65 @@ def exportar_escena(origen, muebles, de_pieza, suelo, salida):
         v_obj, f_obj, c_obj = malla_de_cajas(cajas, colores)
         piezas_v.append(v_obj @ rot_z(giro).T + np.array([x, y, suelo])), piezas_f.append(f_obj), piezas_c.append(c_obj)
     fa = fa[~quitar]
+    # Cascarón: paredes y suelo planos 2 cm por detrás del escaneo, con su color real, para rellenar los huecos de
+    # las zonas lisas que ninguna cámara cubrió. Cada plano tiene una sola cara, mirando hacia dentro: desde fuera de
+    # la habitación no tapa nada (vista de casa de muñecas). Solo superficies que van del suelo al techo.
+    if paredes:
+        q_todos = pb[:, :2] @ rot_z(-giro)[:2, :2].T
+        alto_todos = pb[:, 2] - suelo
+        centro_hab = np.median(q_todos, 0)
+        techo_alto = float(np.percentile(alto_todos, 99.5)) - 0.05
+        v_c, f_c, c_c = [], [], []
+
+        def plano(esquinas, color, normal_deseada):
+            a, b, c_, d = esquinas
+            if np.dot(np.cross(b - a, c_ - a), normal_deseada) < 0:
+                a, b, c_, d = a, d, c_, b
+            base = len(v_c)
+            v_c.extend([a, b, c_, d])
+            f_c.extend([(base, base + 1, base + 2), (base, base + 2, base + 3)])
+            c_c.extend([color] * 4)
+
+        for eje, pos, lo_t, hi_t in paredes:
+            cerca = (np.abs(q_todos[:, eje] - pos) < 0.03) & (q_todos[:, 1 - eje] > lo_t) & (q_todos[:, 1 - eje] < hi_t)
+            if hi_t - lo_t < 1.5 or cerca.sum() < 200:   # los tabiques cortos tienen dos lados «interiores»
+                continue
+            if np.percentile(alto_todos[cerca], 5) > 0.8 or np.percentile(alto_todos[cerca], 95) < techo_alto - 0.5:
+                continue   # no va del suelo al techo: un mueble alto, no una pared
+            hacia_dentro = np.sign(centro_hab[eje] - pos)
+            x = pos - hacia_dentro * 0.02
+            # Rejilla de 10 cm con el color del escaneo cercano en cada punto (rosa, blanco, sombras…).
+            arbol = cKDTree(np.c_[q_todos[cerca, 1 - eje], alto_todos[cerca]])
+            ts = np.linspace(lo_t, hi_t, max(2, int((hi_t - lo_t) / 0.1) + 1))
+            zs = np.linspace(0.0, techo_alto, max(2, int(techo_alto / 0.1) + 1))
+            T_, Z_ = np.meshgrid(ts, zs)
+            _, vecinos = arbol.query(np.c_[T_.ravel(), Z_.ravel()], k=12)
+            colores_rej = c_plana[cerca][vecinos].mean(1).astype(np.uint8)
+            base = len(v_c)
+            for t, z, col in zip(T_.ravel(), Z_.ravel(), colores_rej):
+                q = np.zeros(2)
+                q[eje], q[1 - eje] = x, t
+                v_c.append(np.array([*q, z]))
+                c_c.append(col)
+            nx_ = len(ts)
+            n = np.zeros(3)
+            n[eje] = hacia_dentro
+            for j in range(len(zs) - 1):
+                for i in range(nx_ - 1):
+                    a0, a1 = base + j * nx_ + i, base + j * nx_ + i + 1
+                    b0, b1 = a0 + nx_, a1 + nx_
+                    tri = [(a0, a1, b1), (a0, b1, b0)]
+                    if np.dot(np.cross(v_c[a1] - v_c[a0], v_c[b1] - v_c[a0]), n) < 0:
+                        tri = [(a0, b1, a1), (a0, b0, b1)]
+                    f_c.extend(tri)
+        lo_s, hi_s = np.percentile(q_todos, 1, 0), np.percentile(q_todos, 99, 0)
+        suelo_sel = np.abs(alto_todos) < 0.02
+        col_s = np.median(c_plana[suelo_sel], 0).astype(np.uint8) if suelo_sel.sum() > 100 else np.array([190, 180, 170], np.uint8)
+        plano([np.array([lo_s[0], lo_s[1], -0.02]), np.array([hi_s[0], lo_s[1], -0.02]),
+               np.array([hi_s[0], hi_s[1], -0.02]), np.array([lo_s[0], hi_s[1], -0.02])], col_s, np.array([0, 0, 1.0]))
+        V_c = np.array(v_c)
+        V_c = np.c_[V_c[:, :2] @ rot_z(giro)[:2, :2].T, V_c[:, 2] + suelo]
+        piezas_v.append(V_c), piezas_f.append(np.array(f_c, np.int32)), piezas_c.append(np.array(c_c, np.uint8))
     todos_v, todos_f, todos_c = [vb], [fa], [ca]
     desplazamiento = len(vb)
     for v_obj, f_obj, c_obj in zip(piezas_v, piezas_f, piezas_c):
@@ -864,7 +923,7 @@ def main():
     informe["_escena"] = {"suelo": suelo, "giro_habitacion": giro}
     (destino / "modelado.json").write_text(json.dumps(informe, indent=1, ensure_ascii=False), encoding="utf-8")
     if not a.solo and muebles:
-        exportar_escena(origen, muebles, de_pieza, suelo, origen / "splat2d" / "escena_modelada.ply")
+        exportar_escena(origen, muebles, de_pieza, suelo, origen / "splat2d" / "escena_modelada.ply", paredes, giro)
 
 
 if __name__ == "__main__":
