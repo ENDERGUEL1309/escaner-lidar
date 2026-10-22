@@ -7,9 +7,11 @@ r"""Procesa un escaneo de principio a fin en este PC: un solo comando.
 3. Gaussian Splatting 2D guiado por la profundidad LiDAR y extracción de la malla.
 4. Suavizado y ajuste de suelo, techo y paredes a planos.
 5. Versión ligera para el iPhone.
+6. Modelado verificado: los muebles reconocidos pasan a ser modelos limpios ajustados contra las fotos.
 
 Cada paso se salta si su resultado ya existe, así que si algo falla basta con volver a lanzarlo.
-Resultado en <escaneo>/splat2d/: malla_2dgs_plana.ply (completa) y malla_movil.ply (ligera), además de splats.ply.
+Resultado en <escaneo>/splat2d/: malla_2dgs_plana.ply (completa), malla_movil.ply (ligera), escena_modelada.ply
+(con los muebles modelados) y splats.ply.
 """
 
 from __future__ import annotations
@@ -68,33 +70,42 @@ def procesar(carpeta: Path, max_fotogramas: int = 160, pasos: int = 20_000, tria
     t0 = time.time()
 
     if not (trabajo / "camaras.json").exists():
-        registro("1/5 Preparando imágenes…")
+        registro("1/6 Preparando imágenes…")
         registro(f"    {fotogrametria.preparar(origen, trabajo, max_fotogramas)} imágenes con su pose de ARKit")
     if not (trabajo / "dense" / "fused.ply").exists():
-        registro("1/5 Fotogrametría COLMAP (la parte más larga: profundidad densa en la GPU)…")
+        registro("1/6 Fotogrametría COLMAP (la parte más larga: profundidad densa en la GPU)…")
         registro(f"    {fotogrametria.colmap(trabajo, COLMAP, registro)}")
     else:
-        registro("1/5 Fotogrametría: ya hecha")
+        registro("1/6 Fotogrametría: ya hecha")
 
     # 2-3: alineación, entrenamiento y malla (splat2d_local se encarga de la alineación si falta).
     if not (destino / "malla_2dgs.ply").exists():
-        registro("2-3/5 Alineación con el LiDAR, Gaussian Splatting 2D y malla…")
+        registro("2-3/6 Alineación con el LiDAR, Gaussian Splatting 2D y malla…")
         args = [sys.executable, str(AQUI / "splat2d_local.py"), str(origen), "--pasos", str(pasos)]
         if (destino / "splats.pt").exists():
             args.append("--solo-malla")
         ejecutar(args, registro)
     else:
-        registro("2-3/5 Malla 2DGS: ya hecha")
+        registro("2-3/6 Malla 2DGS: ya hecha")
 
     plana = destino / "malla_2dgs_plana.ply"
     if not plana.exists():
-        registro("4/5 Suavizado y planos…")
+        registro("4/6 Suavizado y planos…")
         ejecutar([sys.executable, str(AQUI / "aplanar_malla.py"), str(destino / "malla_2dgs.ply")], registro)
 
     movil = destino / "malla_movil.ply"
     if not movil.exists():
-        registro("5/5 Versión ligera…")
+        registro("5/6 Versión ligera…")
         malla_movil(plana, movil, triangulos_movil, registro)
+
+    # 6: muebles reconocidos (cama, escritorio, silla con modelo de IA) sustituidos por modelos limpios, ajustados
+    # y verificados contra las fotos. Si algo falla aquí, la malla escaneada sigue siendo un resultado válido.
+    if not (destino / "escena_modelada.ply").exists():
+        registro("6/6 Modelado verificado con fotos…")
+        try:
+            ejecutar([sys.executable, str(AQUI / "modelado_verificado.py"), str(origen)], registro)
+        except RuntimeError as error:
+            registro(f"    sin modelado: {str(error).splitlines()[-1]}")
 
     registro(f"Listo en {(time.time() - t0) / 60:.0f} min → {destino}")
     return destino

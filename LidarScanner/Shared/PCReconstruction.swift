@@ -35,6 +35,11 @@ final class PCReconstruction {
     private var jobURL: URL { folder.appendingPathComponent("pc.json") }
     private var resultsFolder: URL { folder.appendingPathComponent("pc", isDirectory: true) }
     var meshFile: URL { resultsFolder.appendingPathComponent("malla_alta.ply") }
+    /// La misma habitación con los muebles reconocidos sustituidos por modelos limpios (si el PC pudo modelarlos).
+    var modeledFile: URL? {
+        let url = resultsFolder.appendingPathComponent("escena_modelada.ply")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
 
     /// Hacen falta las fotos con su pose (fotos clave y fotogramas) además de la malla LiDAR.
     static func isAvailable(for folder: URL) -> Bool {
@@ -156,6 +161,14 @@ struct PCReconstructionSection: View {
                     Label("Ver la malla de alta calidad", systemImage: "cube.fill")
                         .font(.headline)
                         .foregroundStyle(.indigo)
+                }
+                if let modeled = model.modeledFile {
+                    NavigationLink {
+                        MeshPreviewView(url: modeled, title: "Habitación modelada")
+                    } label: {
+                        Label("Ver la habitación modelada", systemImage: "bed.double.fill")
+                            .foregroundStyle(.indigo)
+                    }
                 }
                 ShareLink(item: model.meshFile) {
                     Label("Compartir malla_alta.ply", systemImage: "square.and.arrow.up")

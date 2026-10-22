@@ -65,9 +65,10 @@ class Progreso:
         (r"stereo_fusion", 0.55, "Fusionando la nube densa"),
         (r"Alineación con el LiDAR", 0.58, "Alineando con el LiDAR"),
         (r"Entrenando", 0.60, "Entrenando el modelo 3D (Gaussian Splatting)"),
-        (r"Rejilla TSDF", 0.90, "Extrayendo la malla"),
-        (r"Giro de la habitación", 0.95, "Ajustando paredes, suelo y techo"),
-        (r"Versión ligera", 0.97, "Preparando la versión para el iPhone"),
+        (r"Rejilla TSDF", 0.86, "Extrayendo la malla"),
+        (r"Giro de la habitación:", 0.90, "Ajustando paredes, suelo y techo"),
+        (r"Versión ligera", 0.92, "Preparando la versión para el iPhone"),
+        (r"Modelado verificado", 0.94, "Modelando los muebles y comprobándolos con las fotos"),
     ]
 
     # La profundidad densa de COLMAP no escribe nada durante ~45 min: su avance se estima por el tiempo.
@@ -106,7 +107,7 @@ class Progreso:
                     self.etapa, self.valor = texto, max(self.valor, valor)
             m = re.search(r"paso\s+(\d+)", linea)
             if m and self.etapa.startswith("Entrenando"):
-                self.valor = max(self.valor, 0.60 + 0.30 * int(m.group(1)) / self.pasos)
+                self.valor = max(self.valor, 0.60 + 0.25 * int(m.group(1)) / self.pasos)
             if self.etapa != anterior:
                 self.inicio_etapa = time.time()
             # Un cambio de etapa se avisa enseguida; el resto, como mucho cada 5 s.
@@ -133,6 +134,8 @@ def atender(trabajo: dict):
         subida = carpeta / "para_el_iphone"
         subida.mkdir(exist_ok=True)
         shutil.copy2(destino / "malla_movil.ply", subida / "malla_alta.ply")
+        if (destino / "escena_modelada.ply").exists():
+            shutil.copy2(destino / "escena_modelada.ply", subida / "escena_modelada.ply")
         avisador.etapa("Subiendo la malla", 0.99)
         subir(subida, trabajo["salida"]["url"])
         avisador.enviar({"estado": "listo", "progreso": 1, "etapa": "Listo", "error": None}, obligatorio=True)
