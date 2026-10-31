@@ -69,13 +69,13 @@ struct InstanceSignatures {
         return both >= 2 && differ * 2 > both
     }
 
-    private struct Mask {
+    struct Mask {
         let width: Int
         let height: Int
         let data: [UInt8]
     }
 
-    private static func instanceMask(for image: RGBImage) -> Mask? {
+    static func instanceMask(for image: RGBImage) -> Mask? {
         guard let cgImage = ObjectRecognizer.cgImage(from: image,
                                                      rect: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         else { return nil }

@@ -5,7 +5,7 @@ name: Compilar IPA
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "feat/**"]
 
 jobs:
   build:
@@ -53,6 +53,10 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/LidarScanner.app Payload/
+          # Sideloadly instala lo que haya: mejor fallar aquí que descubrir en el iPhone que falta el icono o los shaders.
+          test -f Payload/LidarScanner.app/Assets.car
+          test -f Payload/LidarScanner.app/default.metallib
+          plutil -extract CFBundleIcons xml1 -o - Payload/LidarScanner.app/Info.plist
           zip -qry LidarScanner.ipa Payload
 
       - uses: actions/upload-artifact@v4

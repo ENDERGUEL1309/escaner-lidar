@@ -21,6 +21,8 @@ struct ScanSettings {
     /// fotorrealista (Gaussian Splatting) en la nube, que necesita muchas más vistas que la detección.
     var captureSplatFrames = true
     static let maxSplatFrames = 400
+    /// Fusión TSDF en la GPU (TSDFKernels.metal). Si falla en un fotograma, ese fotograma se fusiona en la CPU.
+    var useMetalFusion = false
     /// Las lecturas de confianza media se usan con menos peso; las bajas se descartan.
     var minConfidence: ARConfidenceLevel = .medium
 

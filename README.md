@@ -47,6 +47,12 @@ En Xcode:
 
 Con un Apple ID gratuito la app **caduca a los 7 días**: vuelve a instalarla con Sideloadly cuando pase. Con la cuenta de Apple Developer (99 USD/año) dura 1 año y puede distribuirse por TestFlight.
 
+## Modelar habitación y mejorar en el PC
+
+- **Modelar habitación:** captura con RoomPlan y convierte cada caja en un mueble por piezas (`LidarScanner/RoomModel/`). Se edita en la pantalla (tocar, arrastrar, girar, borrar, medir) y pasa las 4 pruebas de `FourTestVerifier.swift`: Rojo (faltan vistas), Amarillo (sin superar las pruebas), Verde (las superó).
+- **Fusión en la GPU:** opción en los ajustes del escaneo; usa `LidarScanner/Metal/TSDFKernels.metal` y vuelve a la CPU si un fotograma falla.
+- **Mejorar en PC (Wi-Fi):** `pc-windows-server/` recibe el escaneo por la red local y devuelve OBJ, GLB, USDZ y plano DXF. Pasos en [docs/guia-windows.md](docs/guia-windows.md).
+
 ## Cómo se procesa un escaneo de entorno
 
 ```

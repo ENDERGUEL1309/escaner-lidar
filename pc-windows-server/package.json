@@ -1,0 +1,12 @@
+{
+  "name": "escaner-lidar-pc-windows-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor de refinado en la red Wi-Fi local para el boton Mejorar en PC del iPhone",
+  "type": "module",
+  "engines": { "node": ">=22.2" },
+  "scripts": {
+    "start": "node src/servidor.mjs",
+    "test": "node --test"
+  }
+}

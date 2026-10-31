@@ -31,7 +31,7 @@ final class TSDFVolume {
     let voxelSize: Float
     let truncation: Float
     let maxBlocks: Int
-    private let maxWeight: Float = 64
+    static let maxWeight: Float = 64
     private var blocks: [Int64: Block] = [:]
 
     init(voxelSize: Float, maxBlocks: Int) {
@@ -45,9 +45,9 @@ final class TSDFVolume {
 
     // MARK: - Integración de un fotograma
 
-    func integrate(depth: [Float], confidence: [UInt8], width dw: Int, height dh: Int,
-                   camera: CameraModel, rgb: RGBImage, maxDepth: Float, minConfidence: UInt8) {
-        // 1. Reservar los bloques que atraviesa la banda de truncamiento alrededor de cada medición.
+    /// Reserva los bloques que atraviesa la banda de truncamiento alrededor de cada medición y los devuelve.
+    func reserveBlocks(depth: [Float], confidence: [UInt8], width dw: Int, height dh: Int,
+                       camera: CameraModel, maxDepth: Float, minConfidence: UInt8) -> [Block] {
         let cameraPosition = camera.position
         let step = voxelSize * 4
         var touched: [Int64: Block] = [:]
@@ -79,10 +79,17 @@ final class TSDFVolume {
             }
         }
 
-        // 2. Actualizar cada vóxel de esos bloques proyectándolo en el mapa de profundidad (en paralelo).
-        let list = Array(touched.values)
+        return Array(touched.values)
+    }
+
+    func integrate(depth: [Float], confidence: [UInt8], width dw: Int, height dh: Int,
+                   camera: CameraModel, rgb: RGBImage, maxDepth: Float, minConfidence: UInt8) {
+        let list = reserveBlocks(depth: depth, confidence: confidence, width: dw, height: dh,
+                                 camera: camera, maxDepth: maxDepth, minConfidence: minConfidence)
+
+        // Actualizar cada vóxel de esos bloques proyectándolo en el mapa de profundidad (en paralelo).
         guard !list.isEmpty else { return }
-        let vs = voxelSize, trunc = truncation, maxW = maxWeight
+        let vs = voxelSize, trunc = truncation, maxW = Self.maxWeight
         let toRGBx = Float(rgb.width) / Float(dw)
         let toRGBy = Float(rgb.height) / Float(dh)
 

@@ -28,6 +28,28 @@ enum CloudConfig {
     static var isConfigured: Bool { URL(string: server) != nil && token != nil }
 }
 
+/// Servidor de refinado de tu PC en la Wi-Fi de casa (pc-windows-server/). Va aparte de la nube: se puede usar cada uno.
+enum LocalPCConfig {
+    private static let serverKey = "pc.servidor"
+    private static let tokenAccount = "pc.token"
+
+    static var server: String {
+        get { UserDefaults.standard.string(forKey: serverKey) ?? "" }
+        set { UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: serverKey) }
+    }
+
+    static var token: String? {
+        get { Keychain.read(tokenAccount) }
+        set {
+            if let value = newValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                Keychain.write(value, account: tokenAccount)
+            } else {
+                Keychain.delete(tokenAccount)
+            }
+        }
+    }
+}
+
 private enum Keychain {
     private static let service = "EscanerLidar"
 
@@ -96,7 +118,7 @@ struct CloudClient {
 
         var errorDescription: String? {
             switch self {
-            case .notConfigured: "Configura la dirección del servidor y el token en Ajustes de la nube."
+            case .notConfigured: "Configura la dirección del servidor y el token en los ajustes."
             case .server(let message): message
             case .nothingToUpload: "Este escaneo no tiene malla_color.ply ni escena.json: hazlo con «Detectar objetos» activado."
             }
@@ -108,6 +130,19 @@ struct CloudClient {
 
     init() throws {
         guard let base = URL(string: CloudConfig.server), let token = CloudConfig.token else { throw CloudError.notConfigured }
+        self.base = base
+        self.token = token
+    }
+
+    /// Cliente del servidor de tu PC en la red local: misma API que el de la nube.
+    static func localPC() throws -> CloudClient {
+        guard let base = URL(string: LocalPCConfig.server), base.scheme != nil, let token = LocalPCConfig.token else {
+            throw CloudError.notConfigured
+        }
+        return CloudClient(base: base, token: token)
+    }
+
+    private init(base: URL, token: String) {
         self.base = base
         self.token = token
     }

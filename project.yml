@@ -26,6 +26,9 @@ targets:
       properties:
         CFBundleDisplayName: "Escáner LiDAR"
         NSCameraUsageDescription: "La cámara y el sensor LiDAR se usan para escanear objetos y entornos en 3D."
+        NSLocalNetworkUsageDescription: "La red local se usa para enviar el escaneo a tu PC con Windows y recibir el modelo refinado."
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UIRequiredDeviceCapabilities: [arkit]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
@@ -37,5 +40,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tuempresa.lidarscanner
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO

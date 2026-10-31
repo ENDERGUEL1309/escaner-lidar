@@ -112,6 +112,7 @@ struct SceneScanView: View {
                     Toggle("Detectar objetos", isOn: $scanner.settings.detectObjects)
                     Toggle("Guardar fotos para IA en la nube", isOn: $scanner.settings.saveCloudPhotos)
                     Toggle("Fotogramas para vista fotorrealista", isOn: $scanner.settings.captureSplatFrames)
+                    Toggle("Fusión en la GPU (Metal)", isOn: $scanner.settings.useMetalFusion)
                 }
                 .font(.subheadline)
                 .tint(.cyan)

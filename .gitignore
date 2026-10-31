@@ -30,3 +30,6 @@ trabajador-gpu/.venv/
 servidor/.secreto-interno
 servidor/.api-token
 trabajador-gpu/.venv-splat/
+
+# Servidor de refinado del PC (escaneos y token locales)
+pc-windows-server/datos/

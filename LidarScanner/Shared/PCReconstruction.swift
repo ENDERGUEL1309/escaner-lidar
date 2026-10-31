@@ -4,6 +4,7 @@ import SceneKit
 import simd
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// "Malla de alta calidad en mi PC": sube el escaneo al servidor marcado como `malla_pc`; el trabajador del PC
 /// (trabajador-gpu/trabajador_pc.py) lo toma, lo reconstruye con fotogrametría + Gaussian Splatting 2D guiado por
@@ -27,13 +28,17 @@ final class PCReconstruction {
     }
 
     let folder: URL
+    /// `true`: directo a pc-windows-server por la Wi-Fi. `false`: a través del servidor de la nube.
+    let local: Bool
+    /// Añade al refinado la fotogrametría completa de trabajador-gpu (30–60 min).
+    var fullReconstruction = false
     var phase: Phase = .idle
 
     @ObservationIgnored private var job: Job?
     @ObservationIgnored private var work: Task<Void, Never>?
 
-    private var jobURL: URL { folder.appendingPathComponent("pc.json") }
-    private var resultsFolder: URL { folder.appendingPathComponent("pc", isDirectory: true) }
+    private var jobURL: URL { folder.appendingPathComponent(local ? "pc_local.json" : "pc.json") }
+    private var resultsFolder: URL { folder.appendingPathComponent(local ? "pc_local" : "pc", isDirectory: true) }
     var meshFile: URL { resultsFolder.appendingPathComponent("malla_alta.ply") }
     /// La misma habitación con los muebles reconocidos sustituidos por modelos limpios (si el PC pudo modelarlos).
     var modeledFile: URL? {
@@ -48,8 +53,16 @@ final class PCReconstruction {
             && fm.fileExists(atPath: folder.appendingPathComponent("fotos_clave/camaras.json").path)
     }
 
-    init(folder: URL) {
+    /// Modelos y plano devueltos por el refinado local, para compartirlos.
+    var resultFiles: [URL] {
+        ["modelo.obj", "modelo.glb", "modelo.usdz", "plano.dxf", "informe.json"]
+            .map { resultsFolder.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    init(folder: URL, local: Bool = false) {
         self.folder = folder
+        self.local = local
         if let data = try? Data(contentsOf: jobURL), let saved = try? JSONDecoder().decode(Job.self, from: data) {
             job = saved
             phase = saved.descargado ? .ready : .processing(0, "Consultando…")
@@ -87,10 +100,14 @@ final class PCReconstruction {
             work = nil
         }
         do {
-            let client = try CloudClient()
+            let client = try local ? CloudClient.localPC() : CloudClient()
             if upload {
                 phase = .uploading(0)
-                let id = try await client.upload(folder: folder, splats: false, tipo: "malla_pc") { [weak self] fraction in
+                if local {
+                    _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+                }
+                let tipo = !local ? "malla_pc" : fullReconstruction ? "refinado_completo" : "refinado"
+                let id = try await client.upload(folder: folder, splats: false, tipo: tipo) { [weak self] fraction in
                     Task { @MainActor in self?.phase = .uploading(fraction) }
                 }
                 job = Job(id: id)
@@ -115,6 +132,7 @@ final class PCReconstruction {
             save()
             try? await client.delete(id)
             phase = .ready
+            if local { notifyFinished() }
         } catch is CancellationError {
             // Se salió de la pantalla: el trabajo sigue en el servidor y en el PC.
         } catch {
@@ -126,14 +144,23 @@ final class PCReconstruction {
         guard let job, let data = try? JSONEncoder().encode(job) else { return }
         try? data.write(to: jobURL, options: .atomic)
     }
+
+    private func notifyFinished() {
+        let content = UNMutableNotificationContent()
+        content.title = "Modelo mejorado listo"
+        content.body = "Tu PC terminó de refinar \(folder.lastPathComponent)."
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
 }
 
 /// Sección "Malla de alta calidad (tu PC)" de la pantalla de un escaneo.
 struct PCReconstructionSection: View {
     @State private var model: PCReconstruction
+    @State private var showSettings = false
 
-    init(folder: URL) {
-        _model = State(initialValue: PCReconstruction(folder: folder))
+    init(folder: URL, local: Bool = false) {
+        _model = State(initialValue: PCReconstruction(folder: folder, local: local))
     }
 
     var body: some View {
@@ -141,15 +168,21 @@ struct PCReconstructionSection: View {
             switch model.phase {
             case .idle:
                 Button { model.start() } label: {
-                    Label("Reconstruir en alta calidad en mi PC", systemImage: "desktopcomputer")
+                    Label(model.local ? "Mejorar en PC (Wi-Fi)" : "Reconstruir en alta calidad en mi PC", systemImage: "desktopcomputer")
                         .font(.headline)
                         .foregroundStyle(.indigo)
+                }
+                if model.local {
+                    Toggle("Fotogrametría completa (30–60 min)", isOn: $model.fullReconstruction)
+                    Button("Dirección y token del PC") { showSettings = true }
                 }
             case .uploading(let fraction):
                 row("Subiendo escaneo… \(Int(fraction * 100)) %", value: fraction)
             case .processing(let fraction, let stage):
                 row("\(stage) · \(Int(fraction * 100)) %", value: fraction)
-                Text("Tu PC tarda de 30 a 60 minutos. Puedes salir y volver: el trabajo sigue en el PC.")
+                Text(model.local && !model.fullReconstruction
+                     ? "Puedes salir y volver: el trabajo sigue en el PC."
+                     : "Tu PC tarda de 30 a 60 minutos. Puedes salir y volver: el trabajo sigue en el PC.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .downloading:
@@ -173,6 +206,11 @@ struct PCReconstructionSection: View {
                 ShareLink(item: model.meshFile) {
                     Label("Compartir malla_alta.ply", systemImage: "square.and.arrow.up")
                 }
+                ForEach(model.resultFiles, id: \.self) { file in
+                    ShareLink(item: file) {
+                        Label("Compartir \(file.lastPathComponent)", systemImage: "square.and.arrow.up")
+                    }
+                }
                 Button(role: .destructive) { model.discard() } label: {
                     Label("Descartar y volver a pedirla", systemImage: "trash")
                 }
@@ -183,11 +221,14 @@ struct PCReconstructionSection: View {
                 Button("Reintentar") { model.start() }
             }
         } header: {
-            Text("Malla de alta calidad (tu PC)")
+            Text(model.local ? "Mejorar en PC" : "Malla de alta calidad (tu PC)")
         } footer: {
-            Text("Tu PC combina las fotos y el LiDAR (fotogrametría y Gaussian Splatting 2D) en una sola malla limpia, "
-                 + "con paredes planas y cada mueble en su sitio. El PC tiene que estar encendido con el trabajador en marcha.")
+            Text(model.local
+                 ? "Envía el escaneo por la Wi-Fi a tu PC (pc-windows-server) y recibe OBJ, GLB, USDZ y plano DXF. El iPhone y el PC deben estar en la misma red."
+                 : "Tu PC combina las fotos y el LiDAR (fotogrametría y Gaussian Splatting 2D) en una sola malla limpia, "
+                    + "con paredes planas y cada mueble en su sitio. El PC tiene que estar encendido con el trabajador en marcha.")
         }
+        .sheet(isPresented: $showSettings) { LocalPCSettingsView() }
         .onAppear { model.resume() }
         .onDisappear { model.cancelMonitoring() }
     }
@@ -198,6 +239,71 @@ struct PCReconstructionSection: View {
             if let value { ProgressView(value: value) } else { ProgressView() }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Dirección y token del servidor del PC: los imprime pc-windows-server al arrancar.
+struct LocalPCSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var server = LocalPCConfig.server
+    @State private var token = LocalPCConfig.token ?? ""
+    @State private var testResult: String?
+    @State private var testing = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Dirección") {
+                    TextField("http://192.168.1.20:8787", text: $server)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                Section {
+                    SecureField("Token", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Token")
+                } footer: {
+                    Text("El PC los muestra al arrancar el servidor. El token se guarda en el llavero del iPhone.")
+                }
+                Section {
+                    Button(testing ? "Probando…" : "Probar conexión") { Task { await test() } }
+                        .disabled(testing || token.isEmpty || server.isEmpty)
+                    if let testResult { Text(testResult).font(.callout) }
+                }
+            }
+            .navigationTitle("Servidor del PC")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancelar") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Guardar") {
+                        saveFields()
+                        dismiss()
+                    }
+                    .disabled(token.isEmpty || server.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func saveFields() {
+        LocalPCConfig.server = server
+        LocalPCConfig.token = token
+    }
+
+    private func test() async {
+        testing = true
+        defer { testing = false }
+        saveFields()
+        do {
+            try await CloudClient.localPC().checkConnection()
+            testResult = "✅ Conectado a tu PC"
+        } catch {
+            testResult = "❌ \(error.localizedDescription)"
+        }
     }
 }
 

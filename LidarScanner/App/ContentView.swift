@@ -21,6 +21,17 @@ struct ContentView: View {
                     .disabled(!SceneScanner.isSupported)
 
                     NavigationLink {
+                        RoomScanView()
+                    } label: {
+                        ModeCard(title: "Modelar habitación",
+                                 subtitle: "RoomPlan + 4 pruebas: muebles por piezas, editables en pantalla (mover, girar, borrar, medir) y exportables.",
+                                 systemImage: "square.split.bottomrightquarter.fill",
+                                 tint: .mint,
+                                 available: RoomScanView.isSupported)
+                    }
+                    .disabled(!RoomScanView.isSupported)
+
+                    NavigationLink {
                         ObjectScanView()
                     } label: {
                         ModeCard(title: "Escanear objeto",

@@ -37,6 +37,7 @@ struct ExportedFilesView: View {
 
                 if PCReconstruction.isAvailable(for: viewerFolder) {
                     PCReconstructionSection(folder: viewerFolder)
+                    PCReconstructionSection(folder: viewerFolder, local: true)
                 }
             }
 

@@ -43,6 +43,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
     @ObservationIgnored private let queue = DispatchQueue(label: "lidar.scan.processing", qos: .userInitiated)
     @ObservationIgnored private var volume = TSDFVolume(voxelSize: 0.015, maxBlocks: 80_000)   // solo desde `queue`
     @ObservationIgnored private let keyframes = KeyframeStore()                                // solo desde `queue`
+    @ObservationIgnored private let metalFusion = MetalFusion()                                // solo desde `queue`
     @ObservationIgnored private let ciContext = CIContext()
     @ObservationIgnored private let keyframeFolder = FileManager.default.temporaryDirectory
         .appendingPathComponent("FotosClave", isDirectory: true)
@@ -452,7 +453,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
 
     // MARK: - Integración (cola de procesado)
 
-    private static func copyDepth(_ sceneDepth: ARDepthData) -> (depth: [Float], confidence: [UInt8], width: Int, height: Int) {
+    static func copyDepth(_ sceneDepth: ARDepthData) -> (depth: [Float], confidence: [UInt8], width: Int, height: Int) {
         let depthMap = sceneDepth.depthMap
         let w = CVPixelBufferGetWidth(depthMap)
         let h = CVPixelBufferGetHeight(depthMap)
@@ -542,10 +543,20 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let depthCamera = baseCamera.scaled(sx: sx, sy: sy)
 
         // Fusión volumétrica: cada lectura LiDAR refina la distancia a la superficie y su color.
-        volume.integrate(depth: depth, confidence: raw.confidence, width: raw.width, height: raw.height,
-                         camera: depthCamera, rgb: rgb,
-                         maxDepth: settings.maxDepth,
-                         minConfidence: UInt8(settings.minConfidence.rawValue))
+        let minConfidence = UInt8(settings.minConfidence.rawValue)
+        var fusedOnGPU = false
+        if settings.useMetalFusion, let metalFusion, let confidenceMap = sceneDepth.confidenceMap {
+            let blocks = volume.reserveBlocks(depth: depth, confidence: raw.confidence, width: raw.width, height: raw.height,
+                                              camera: depthCamera, maxDepth: settings.maxDepth, minConfidence: minConfidence)
+            fusedOnGPU = metalFusion.integrate(into: volume, blocks: blocks, camera: depthCamera,
+                                               depthMap: sceneDepth.depthMap, confidenceMap: confidenceMap,
+                                               capturedImage: frame.capturedImage,
+                                               maxDepth: settings.maxDepth, minConfidence: minConfidence)
+        }
+        if !fusedOnGPU {
+            volume.integrate(depth: depth, confidence: raw.confidence, width: raw.width, height: raw.height,
+                             camera: depthCamera, rgb: rgb, maxDepth: settings.maxDepth, minConfidence: minConfidence)
+        }
     }
 
     // MARK: - Post-proceso y exportación (cola de procesado)
