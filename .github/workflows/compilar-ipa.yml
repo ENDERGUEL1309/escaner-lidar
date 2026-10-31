@@ -32,6 +32,8 @@ jobs:
             echo "Descargando plataforma iOS…"
             xcodebuild -downloadPlatform iOS
           fi
+          # Sin esto, los .metal fallan con "missing Metal Toolchain" en las versiones recientes de Xcode.
+          xcodebuild -downloadComponent MetalToolchain
           xcodebuild -showsdks
 
       - name: Compilar (sin firma)
