@@ -26,6 +26,8 @@ import torch.nn.functional as F
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
+from profundidad_densa import mascara_fiable, normales as normales_prof_densa  # noqa: E402
+
 HERRAMIENTAS = Path.home() / "Herramientas"
 
 
@@ -199,6 +201,8 @@ def main():
     p.add_argument("--peso-profundidad", type=float, default=0.3)
     p.add_argument("--voxel", type=float, default=0.008, help="tamaño de vóxel de la fusión TSDF (m)")
     p.add_argument("--solo-malla", action="store_true", help="no entrenar: extraer la malla de splats.pt")
+    p.add_argument("--salida", default="splat2d", help="carpeta de resultados dentro del escaneo")
+    p.add_argument("--peso-normales", type=float, default=0.1, help="peso de las normales de la profundidad densa")
     a = p.parse_args()
 
     from gsplat import rasterization_2dgs
@@ -206,7 +210,7 @@ def main():
 
     origen = Path(a.carpeta).resolve()
     trabajo = HERRAMIENTAS / "trabajos" / origen.name
-    destino = origen / "splat2d"
+    destino = origen / a.salida
     destino.mkdir(exist_ok=True)
     registro_txt = open(destino / "registro.txt", "a", encoding="utf-8")
 
@@ -231,6 +235,16 @@ def main():
         v["prof"] = profundidad_lidar(lidar, v["w2c"], v["K"], v["ancho"], v["alto"]).cpu()
     cobertura = np.mean([(v["prof"] > 0).float().mean().item() for v in vistas])
     registro(f"Profundidad LiDAR proyectada en {time.time() - t0:.0f} s (cobertura media {cobertura:.0%})")
+
+    # Profundidad densa foto + LiDAR (profundidad_densa.py): sustituye a la proyección donde exista.
+    densas = 0
+    for v in vistas:
+        ruta_densa = origen / "profundidad_densa" / (Path(v["nombre"]).stem + ".npy")
+        if ruta_densa.exists():
+            v["prof"] = torch.from_numpy(np.load(ruta_densa)).float()
+            v["densa"] = True
+            densas += 1
+    registro(f"Profundidad densa en {densas} de {len(vistas)} vistas")
 
     centros = np.array([np.linalg.inv(v["w2c"])[:3, 3] for v in vistas])
     escena = float(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max())
@@ -299,9 +313,10 @@ def main():
             l1 = (color_corr - gt).abs().mean()
             perdida = 0.8 * l1 + 0.2 * (1 - ssim(color_corr.permute(2, 0, 1)[None], gt.permute(2, 0, 1)[None]))
             perdida = perdida + 0.01 * (e ** 2).sum()
-            # Profundidad LiDAR (relativa) a 1/4 de resolución.
+            # Profundidad de referencia (relativa): 1/4 de resolución la proyectada, 1/2 la densa.
             prof = render[0, ..., 3:4].permute(2, 0, 1)[None]
-            prof_baja = F.avg_pool2d(prof, 4)[0, 0]
+            red = round(v["alto"] / v["prof"].shape[0])
+            prof_baja = F.avg_pool2d(prof, red)[0, 0]
             ref = v["prof"].to(dev)
             hh, ww = min(ref.shape[0], prof_baja.shape[0]), min(ref.shape[1], prof_baja.shape[1])
             ref, prof_baja = ref[:hh, :ww], prof_baja[:hh, :ww]
@@ -310,8 +325,15 @@ def main():
                 rel = ((prof_baja - ref).abs() / ref)[valida]
                 perdida = perdida + a.peso_profundidad * rel.clamp(max=0.5).mean()
                 # La habitación es cerrada: donde el LiDAR ve superficie, el render debe ser opaco.
-                alfa_baja = F.avg_pool2d(alfa[0].permute(2, 0, 1)[None], 4)[0, 0][:hh, :ww]
+                alfa_baja = F.avg_pool2d(alfa[0].permute(2, 0, 1)[None], red)[0, 0][:hh, :ww]
                 perdida = perdida + 0.1 * (1 - alfa_baja[valida]).mean()
+                # Las normales de la referencia dan la forma fina (patas, cantos), no solo la distancia.
+                if v.get("densa") and paso >= 3000:
+                    fx, fy = float(v["K"][0, 0]) / red, float(v["K"][1, 1]) / red
+                    fiable = mascara_fiable(ref)
+                    if fiable.any():
+                        coseno = (normales_prof_densa(prof_baja, fx, fy) * normales_prof_densa(ref, fx, fy)).sum(-1)
+                        perdida = perdida + a.peso_normales * (1 - coseno[fiable]).mean()
             if paso >= 7000:
                 # gsplat devuelve las normales de la superficie sin la dimensión de lote.
                 n_sup = normales_prof.reshape(normales[0].shape) * alfa[0].detach()

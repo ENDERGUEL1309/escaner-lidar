@@ -228,7 +228,7 @@ struct CloudClient {
         var files = ["malla_color.ply", "escena.json", "textura.jpg", "edicion.json"]
             .filter { fm.fileExists(atPath: folder.appendingPathComponent($0).path) }
         for (sub, extensions) in [("objetos", ["ply"]), ("fotos_clave", ["jpg", "jpeg", "prof", "json"]),
-                                  ("fotogramas", ["jpg", "json"])] {
+                                  ("fotogramas", ["jpg", "prof", "json"])] {
             let dir = folder.appendingPathComponent(sub)
             let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
             files += names.filter { extensions.contains(($0 as NSString).pathExtension.lowercased()) }

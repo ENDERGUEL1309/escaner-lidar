@@ -7,6 +7,7 @@ import simd
 ///       camaras.json   intrínsecos y pose de ARKit de cada foto (matriz por columnas, como simd_float4x4)
 ///       000.jpg …      fotos a resolución completa (hasta 12 MP)
 ///       000.prof …     profundidad LiDAR: ancho y alto (uint32) + metros en Float16, 0 = sin dato
+///                      + confianza de ARKit en uint8 por píxel (0 baja, 1 media, 2 alta)
 ///
 /// Las fotos se mueven (no se copian) desde la carpeta temporal: se borrarían al terminar el escaneo.
 enum CloudExport {
@@ -52,7 +53,8 @@ enum CloudExport {
             try FileManager.default.moveItem(at: source, to: directory.appendingPathComponent("\(name).jpg"))
 
             let depthName = "\(name).prof"
-            try depthData(frame).write(to: directory.appendingPathComponent(depthName), options: .atomic)
+            try depthData(frame.depth, width: frame.depthWidth, height: frame.depthHeight, confidence: frame.confidence)
+                .write(to: directory.appendingPathComponent(depthName), options: .atomic)
 
             let camera = frame.fullCamera
             let depthCamera = frame.depthCamera
@@ -74,7 +76,7 @@ enum CloudExport {
     }
 
     /// Mueve los fotogramas para Gaussian Splatting a `fotogramas/` y escribe su `camaras.json`
-    /// (mismo formato que `fotos_clave/`, sin profundidad).
+    /// (mismo formato que `fotos_clave/`, con su profundidad).
     static func saveFrames(_ records: [Photo], from temporary: URL, to folder: URL) throws {
         guard !records.isEmpty else { return }
         let directory = folder.appendingPathComponent("fotogramas", isDirectory: true)
@@ -84,6 +86,10 @@ enum CloudExport {
             let source = temporary.appendingPathComponent(record.archivo)
             guard (try? FileManager.default.moveItem(at: source, to: directory.appendingPathComponent(record.archivo))) != nil
             else { continue }
+            if let depth = record.profundidad {
+                try? FileManager.default.moveItem(at: temporary.appendingPathComponent(depth.archivo),
+                                                  to: directory.appendingPathComponent(depth.archivo))
+            }
             saved.append(record)
         }
         let encoder = JSONEncoder()
@@ -96,13 +102,14 @@ enum CloudExport {
         [m.columns.0, m.columns.1, m.columns.2, m.columns.3].flatMap { [$0.x, $0.y, $0.z, $0.w] }
     }
 
-    private static func depthData(_ frame: Keyframe) -> Data {
-        var data = Data(capacity: 8 + frame.depth.count * 2)
-        withUnsafeBytes(of: UInt32(frame.depthWidth).littleEndian) { data.append(contentsOf: $0) }
-        withUnsafeBytes(of: UInt32(frame.depthHeight).littleEndian) { data.append(contentsOf: $0) }
-        for d in frame.depth {
+    static func depthData(_ depth: [Float], width: Int, height: Int, confidence: [UInt8]) -> Data {
+        var data = Data(capacity: 8 + depth.count * 3)
+        withUnsafeBytes(of: UInt32(width).littleEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(height).littleEndian) { data.append(contentsOf: $0) }
+        for d in depth {
             withUnsafeBytes(of: Float16(d).bitPattern.littleEndian) { data.append(contentsOf: $0) }
         }
+        if confidence.count == depth.count { data.append(contentsOf: confidence) }
         return data
     }
 }

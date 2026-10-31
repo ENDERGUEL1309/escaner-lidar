@@ -17,6 +17,8 @@ struct Keyframe {
     let fullHeight: Int
     /// Momento de la captura (segundos de ARKit), para ordenar las fotos.
     let timestamp: TimeInterval
+    /// Confianza de ARKit por píxel de `depth` (0 baja, 1 media, 2 alta). Vacía si no se conoce.
+    var confidence: [UInt8] = []
 
     var position: SIMD3<Float> { imageCamera.position }
 
@@ -37,7 +39,7 @@ final class KeyframeStore {
     private(set) var decimations = 0
     private let maxCount: Int
 
-    init(maxCount: Int = 60) {
+    init(maxCount: Int = 100) {
         self.maxCount = maxCount
     }
 

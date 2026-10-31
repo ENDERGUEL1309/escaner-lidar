@@ -268,9 +268,10 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let timestamp = frame.timestamp
         let index = splatFrameCount
         let correction = poseCorrection
+        let sceneDepth = frame.smoothedSceneDepth ?? frame.sceneDepth
         splatQueue.async { [weak self] in
             guard let self else { return }
-            let saved = self.saveSplatFrame(buffer: buffer, camera: camera, correction: correction,
+            let saved = self.saveSplatFrame(buffer: buffer, sceneDepth: sceneDepth, camera: camera, correction: correction,
                                             timestamp: timestamp, index: index)
             DispatchQueue.main.async {
                 self.isSavingSplatFrame = false
@@ -279,8 +280,9 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         }
     }
 
-    /// Reduce el fotograma a 1280 px de ancho y lo guarda en JPEG con su cámara (intrínsecos escalados).
-    private func saveSplatFrame(buffer: CVPixelBuffer, camera: ARCamera, correction: simd_float4x4,
+    /// Reduce el fotograma a 1280 px de ancho y lo guarda en JPEG con su cámara (intrínsecos escalados), junto a su
+    /// mapa LiDAR con la confianza: cada fotograma lleva así la foto, la profundidad y la pose del mismo instante.
+    private func saveSplatFrame(buffer: CVPixelBuffer, sceneDepth: ARDepthData?, camera: ARCamera, correction: simd_float4x4,
                                 timestamp: TimeInterval, index: Int) -> Bool {
         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
         let scale = min(1, 1280 / Float(width))
@@ -298,12 +300,25 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: correction * camera.transform)
             .scaled(sx: Float(width) / Float(resolution.width) * scale, sy: Float(height) / Float(resolution.height) * scale)
         let m = model.cameraToWorld
+        var depthInfo: CloudExport.DepthInfo?
+        if let sceneDepth {
+            let raw = Self.copyDepth(sceneDepth)
+            let depth = Self.removeFlyingPixels(raw.depth, width: raw.width, height: raw.height)
+            let depthName = String(format: "%04d.prof", index)
+            let data = CloudExport.depthData(depth, width: raw.width, height: raw.height, confidence: raw.confidence)
+            if (try? data.write(to: splatFolder.appendingPathComponent(depthName), options: .atomic)) != nil {
+                let unscaled = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: correction * camera.transform)
+                    .scaled(sx: Float(raw.width) / Float(resolution.width), sy: Float(raw.height) / Float(resolution.height))
+                depthInfo = CloudExport.DepthInfo(archivo: depthName, ancho: raw.width, alto: raw.height,
+                                                  fx: unscaled.fx, fy: unscaled.fy, cx: unscaled.cx, cy: unscaled.cy)
+            }
+        }
         splatRecords.append(CloudExport.Photo(
             archivo: name,
             ancho: Int((Float(width) * scale).rounded()), alto: Int((Float(height) * scale).rounded()),
             fx: model.fx, fy: model.fy, cx: model.cx, cy: model.cy,
             cameraToWorld: [m.columns.0, m.columns.1, m.columns.2, m.columns.3].flatMap { [$0.x, $0.y, $0.z, $0.w] },
-            marcaTiempo: timestamp, profundidad: nil))
+            marcaTiempo: timestamp, profundidad: depthInfo))
         return true
     }
 
@@ -437,7 +452,8 @@ final class SceneScanner: NSObject, ARSessionDelegate {
         keyframes.add(Keyframe(image: small, imageCamera: smallCamera,
                                depth: occlusionDepth, depthWidth: depth.width, depthHeight: depth.height,
                                depthCamera: depthCamera,
-                               fullImageURL: url, fullCamera: fullCamera, fullWidth: width, fullHeight: height, timestamp: timestamp))
+                               fullImageURL: url, fullCamera: fullCamera, fullWidth: width, fullHeight: height, timestamp: timestamp,
+                               confidence: depth.confidence))
     }
 
     private static func position(of t: simd_float4x4) -> SIMD3<Float> {
