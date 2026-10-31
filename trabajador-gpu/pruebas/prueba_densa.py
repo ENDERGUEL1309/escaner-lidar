@@ -3,6 +3,7 @@
     .venv-splat\\Scripts\\python pruebas\\prueba_densa.py
 """
 
+import json
 import struct
 import sys
 import tempfile
@@ -70,12 +71,26 @@ def prueba_prof_con_confianza():
     assert mapa[0, 1] == 1.5
 
 
-def prueba_busca_prompt_por_nombre():
-    reales = {"fotogramas/0001.jpg": Path("a.prof"), "fotos_clave/000.jpg": Path("b.prof")}
-    assert pd.prompt_de_vista("fotogramas/0001.jpg", reales) == Path("a.prof")
-    assert pd.prompt_de_vista("0001.jpg", reales) == Path("a.prof")
-    assert pd.prompt_de_vista("fotos_clave_000.jpg", reales) == Path("b.prof")
-    assert pd.prompt_de_vista("9999.jpg", reales) is None
+def prueba_alinear_quita_el_sesgo_y_resiste_atipicos():
+    lidar = torch.linspace(1, 3, 192 * 256).reshape(192, 256)
+    con_sesgo = (lidar - 0.022) / 1.01
+    lidar = lidar.clone()
+    lidar[:20] = 0                     # sin dato
+    lidar[100:110, :] = 0.3            # objeto delante que la predicción no ve
+    alineada, a, b = pd.alinear_a_lidar(con_sesgo, lidar)
+    assert abs(a - 1.01) < 0.002 and abs(b - 0.022) < 0.003, (a, b)
+    assert (alineada[30:90] - lidar[30:90]).abs().max() < 0.002
+
+
+def prueba_nombres_de_las_vistas():
+    with tempfile.TemporaryDirectory() as d:
+        origen = Path(d)
+        for sub, archivo in (("fotos_clave", "000"), ("fotogramas", "0001")):
+            (origen / sub).mkdir()
+            (origen / sub / "camaras.json").write_text(json.dumps({"fotos": [
+                {"archivo": f"{archivo}.jpg", "profundidad": {"archivo": f"{archivo}.prof"}}]}), "utf-8")
+        reales = pd.prompts_reales(origen)
+    assert set(reales) == {"fot_000.jpg", "fot_0001.jpg"}, "mismos nombres que fotogrametria.preparar"
 
 
 if __name__ == "__main__":

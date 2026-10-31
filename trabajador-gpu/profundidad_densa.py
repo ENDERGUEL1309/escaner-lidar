@@ -9,9 +9,11 @@ vista (el `.prof` guardado junto a la foto) y, en escaneos antiguos sin ella, la
 Resultado en <escaneo>/profundidad_densa/<vista>.npy (float32, metros, a la mitad de la resolución de entrenamiento).
 splat2d_local.py lo usa solo si existe esa carpeta.
 
-Instalación (una vez), en el entorno .venv-splat:
-    git clone https://github.com/DepthAnything/PromptDA.git %USERPROFILE%\Herramientas\PromptDA
-    .venv-splat\Scripts\python -m pip install -e %USERPROFILE%\Herramientas\PromptDA
+Instalación (una vez). No hay que instalar sus requirements: fijan torch 2.0.1 y romperían .venv-splat, y para
+inferencia solo hace falta torch:
+    git clone --depth 1 https://github.com/DepthAnything/PromptDA.git %USERPROFILE%\Herramientas\PromptDA
+    y guardar en Herramientas\PromptDA\checkpoints\model.ckpt el archivo de
+    https://huggingface.co/depth-anything/prompt-depth-anything-vitl/resolve/main/model.ckpt
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-MODELO = "depth-anything/prompt-depth-anything-vitl"
+PROMPTDA = Path.home() / "Herramientas" / "PromptDA"
 PROMPT_ALTO, PROMPT_ANCHO = 192, 256      # tamaño del mapa LiDAR de ARKit, con el que se entrenó PromptDA
 PROF_MIN, PROF_MAX = 0.1, 8.0
 COBERTURA_MINIMA = 0.2
@@ -75,6 +77,25 @@ def preparar_prompt(mapa: torch.Tensor) -> torch.Tensor | None:
     return F.interpolate(lleno[None, None], (PROMPT_ALTO, PROMPT_ANCHO), mode="bilinear", align_corners=False)
 
 
+def alinear_a_lidar(prof: torch.Tensor, lidar: torch.Tensor, iteraciones: int = 5) -> tuple[torch.Tensor, float, float]:
+    """La salida de PromptDA trae un sesgo de centímetros, y las medidas las manda el LiDAR. Ajusta a·prof + b a las
+    lecturas válidas con mínimos cuadrados robustos (lo que discrepa mucho, como un borde, no arrastra el ajuste)."""
+    baja = F.interpolate(prof[None, None], lidar.shape, mode="bilinear", align_corners=False)[0, 0]
+    valido = (lidar >= PROF_MIN) & (lidar <= PROF_MAX) & (baja > 0)
+    if valido.sum() < 100:
+        return prof, 1.0, 0.0
+    x, y = baja[valido].double(), lidar[valido].double()
+    a, b = 1.0, torch.median(y - x).item()
+    for _ in range(iteraciones):
+        resto = (a * x + b - y).abs()
+        peso = 0.02 / resto.clamp(min=0.02)      # Huber con umbral de 2 cm
+        sw, sx, sy = peso.sum(), (peso * x).sum(), (peso * y).sum()
+        a = ((peso * x * y).sum() * sw - sx * sy) / ((peso * x * x).sum() * sw - sx * sx)
+        b = (sy - a * sx) / sw
+    a, b = float(a), float(b)
+    return a * prof + b, a, b
+
+
 def derivadas(prof: torch.Tensor):
     du = (prof[..., 1:-1, 2:] - prof[..., 1:-1, :-2]) / 2
     dv = (prof[..., 2:, 1:-1] - prof[..., :-2, 1:-1]) / 2
@@ -98,7 +119,7 @@ def mascara_fiable(prof: torch.Tensor, salto: float = 0.04) -> torch.Tensor:
 
 
 def prompts_reales(origen: Path) -> dict[str, Path]:
-    """Nombre de vista → su `.prof`, para las dos carpetas de imágenes del escaneo."""
+    """Nombre de vista → su `.prof`. Los nombres son los que da fotogrametria.preparar a las imágenes de trabajo."""
     rutas: dict[str, Path] = {}
     for sub in ("fotos_clave", "fotogramas"):
         indice = origen / sub / "camaras.json"
@@ -107,22 +128,30 @@ def prompts_reales(origen: Path) -> dict[str, Path]:
         for foto in json.loads(indice.read_text("utf-8")).get("fotos", []):
             info = foto.get("profundidad")
             if isinstance(info, dict):
-                rutas[f"{sub}/{foto['archivo']}"] = origen / sub / info["archivo"]
+                rutas[f"{sub[:3]}_{Path(foto['archivo']).stem}.jpg"] = origen / sub / info["archivo"]
     return rutas
 
 
-def prompt_de_vista(nombre: str, reales: dict[str, Path]) -> Path | None:
-    """Las imágenes de trabajo pueden llevar otro nombre: se busca por el nombre del archivo original."""
-    if nombre in reales:
-        return reales[nombre]
-    plano = nombre.replace("\\", "/").split("/")[-1]
-    coincidencias = [r for clave, r in reales.items() if clave.endswith("/" + plano) or clave.replace("/", "_") == plano]
-    return coincidencias[0] if len(coincidencias) == 1 else None
+def cargar_modelo(dev: torch.device):
+    """PromptDA desde su carpeta. Solo usa huggingface_hub para descargar, y aquí el modelo ya está en disco."""
+    import types
+
+    sys.path.insert(0, str(PROMPTDA))
+    if "huggingface_hub" not in sys.modules:
+        try:
+            import huggingface_hub  # noqa: F401
+        except ImportError:
+            sys.modules["huggingface_hub"] = types.SimpleNamespace(hf_hub_download=None)
+    from promptda.promptda import PromptDA
+
+    ruta = PROMPTDA / "checkpoints" / "model.ckpt"
+    if not ruta.exists():
+        raise SystemExit(f"Falta el modelo: {ruta}")
+    return PromptDA.from_pretrained(str(ruta)).to(dev).eval()
 
 
 @torch.no_grad()
 def main():
-    from promptda.promptda import PromptDA
     from splat2d_local import HERRAMIENTAS, cargar_vistas, leer_ply, profundidad_lidar
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -141,23 +170,26 @@ def main():
         vistas = vistas[:a.limite]
 
     dev = torch.device("cuda")
-    modelo = PromptDA.from_pretrained(MODELO).to(dev).eval()
+    modelo = cargar_modelo(dev)
     lidar = torch.from_numpy(leer_ply(origen / "malla_color.ply")[0]).to(dev)
     reales = prompts_reales(origen)
 
     usadas = {"lidar": 0, "malla": 0, "sin_prompt": 0}
+    ajustes: list[tuple[float, float]] = []
     t0 = time.time()
     for i, v in enumerate(vistas):
         destino = salida / (Path(v["nombre"]).stem + ".npy")
         if destino.exists():
             continue
-        prompt, fuente = None, "sin_prompt"
-        ruta = prompt_de_vista(v["nombre"], reales)
+        prompt, fuente, referencia = None, "sin_prompt", None
+        ruta = reales.get(v["nombre"])
         if ruta is not None and (mapa := leer_prof(ruta)) is not None:
-            prompt = preparar_prompt(torch.from_numpy(mapa.copy()).to(dev))
+            referencia = torch.from_numpy(mapa.copy()).to(dev)
+            prompt = preparar_prompt(referencia)
             fuente = "lidar"
         if prompt is None:
             proyectada = profundidad_lidar(lidar, v["w2c"], v["K"], v["ancho"], v["alto"], red=2)
+            referencia = proyectada
             prompt = preparar_prompt(proyectada)
             fuente = "malla"
         if prompt is None:
@@ -172,10 +204,15 @@ def main():
             prof = modelo.predict(img, prompt).float()
         prof = F.interpolate(prof.reshape(1, 1, *prof.shape[-2:]), (v["alto"] // 2, v["ancho"] // 2),
                              mode="bilinear", align_corners=False)[0, 0]
+        prof, escala, desfase = alinear_a_lidar(prof, referencia)
+        ajustes.append((escala, desfase))
         np.save(destino, prof.cpu().numpy().astype(np.float32))
         if i % 20 == 0:
             print(f"Profundidad densa: {i + 1}/{len(vistas)}", flush=True)
     print(f"Profundidad densa lista en {time.time() - t0:.0f} s: {usadas}", flush=True)
+    if ajustes:
+        e, d = np.median(np.array(ajustes), axis=0)
+        print(f"Ajuste mediano al LiDAR: escala {e:.4f}, desfase {d * 1000:.1f} mm", flush=True)
 
 
 if __name__ == "__main__":
