@@ -60,8 +60,23 @@ def leer_ply(ruta: Path) -> tuple[np.ndarray, np.ndarray]:
     return xyz, rgb
 
 
-def cargar_vistas(trabajo: Path, T: np.ndarray, lado: int):
-    """Imágenes, intrínsecos y poses (mundo a cámara, convención OpenCV) en el mundo LiDAR."""
+def poses_arkit(origen: Path) -> dict[str, np.ndarray]:
+    """Nombre de vista → mundo a cámara (OpenCV) con la pose de ARKit ya corregida contra el volumen LiDAR."""
+    from escaner_ia.camaras import arkit_a_opencv, matriz_columnas
+
+    poses = {}
+    for sub in ("fotos_clave", "fotogramas"):
+        indice = origen / sub / "camaras.json"
+        if indice.exists():
+            for foto in json.loads(indice.read_text("utf-8")).get("fotos", []):
+                poses[f"{sub[:3]}_{Path(foto['archivo']).stem}.jpg"] = arkit_a_opencv(matriz_columnas(foto["cameraToWorld"]))
+    return poses
+
+
+def cargar_vistas(trabajo: Path, T: np.ndarray, lado: int, origen_arkit: Path | None = None):
+    """Imágenes, intrínsecos y poses (mundo a cámara, convención OpenCV) en el mundo LiDAR.
+    Con `origen_arkit`, las poses de ARKit en lugar de las del ajuste de haces."""
+    arkit = poses_arkit(origen_arkit) if origen_arkit else {}
     camaras = json.loads((trabajo / "camaras.json").read_text())
     s = np.cbrt(np.linalg.det(T[:3, :3]))
     RT, tT = T[:3, :3] / s, T[:3, 3]
@@ -76,6 +91,8 @@ def cargar_vistas(trabajo: Path, T: np.ndarray, lado: int):
         Rc2w = RT @ R.T
         w2c = np.eye(4)
         w2c[:3, :3], w2c[:3, 3] = Rc2w.T, -Rc2w.T @ centro
+        if p[9] in arkit:
+            w2c = arkit[p[9]]
         k = camaras[p[9]]
         img = Image.open(trabajo / "imagenes" / p[9]).convert("RGB")
         f = min(1.0, lado / max(img.size))
@@ -202,6 +219,9 @@ def main():
     p.add_argument("--voxel", type=float, default=0.008, help="tamaño de vóxel de la fusión TSDF (m)")
     p.add_argument("--solo-malla", action="store_true", help="no entrenar: extraer la malla de splats.pt")
     p.add_argument("--salida", default="splat2d", help="carpeta de resultados dentro del escaneo")
+    p.add_argument("--poses", choices=["arkit", "colmap"], default="colmap",
+                   help="arkit: sin las poses del ajuste de haces, que derivan en paredes sin textura")
+    p.add_argument("--densa", default="profundidad_densa", help="carpeta de la profundidad densa")
     p.add_argument("--peso-normales", type=float, default=0.1, help="peso de las normales de la profundidad densa")
     a = p.parse_args()
 
@@ -224,7 +244,7 @@ def main():
     if not ruta_T.exists():
         alinear_con_lidar(origen, trabajo, ruta_T, registro)
     T = np.array(json.loads(ruta_T.read_text())["matriz"])
-    vistas = cargar_vistas(trabajo, T, a.lado)
+    vistas = cargar_vistas(trabajo, T, a.lado, origen if a.poses == "arkit" else None)
     registro(f"{len(vistas)} vistas a {vistas[0]['ancho']}x{vistas[0]['alto']} (fotos clave) y "
              f"{vistas[-1]['ancho']}x{vistas[-1]['alto']} (fotogramas)")
 
@@ -239,7 +259,7 @@ def main():
     # Profundidad densa foto + LiDAR (profundidad_densa.py): sustituye a la proyección donde exista.
     densas = 0
     for v in vistas:
-        ruta_densa = origen / "profundidad_densa" / (Path(v["nombre"]).stem + ".npy")
+        ruta_densa = origen / a.densa / (Path(v["nombre"]).stem + ".npy")
         if ruta_densa.exists():
             v["prof"] = torch.from_numpy(np.load(ruta_densa)).float()
             v["densa"] = True

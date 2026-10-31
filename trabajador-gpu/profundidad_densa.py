@@ -158,14 +158,16 @@ def main():
     p.add_argument("carpeta")
     p.add_argument("--lado", type=int, default=1280, help="lado mayor de las imágenes, como en splat2d_local")
     p.add_argument("--limite", type=int, default=0, help="procesar solo las N primeras vistas (para probar)")
+    p.add_argument("--poses", choices=["arkit", "colmap"], default="colmap")
+    p.add_argument("--salida", default="profundidad_densa", help="carpeta de resultados dentro del escaneo")
     a = p.parse_args()
 
     origen = Path(a.carpeta).resolve()
     trabajo = HERRAMIENTAS / "trabajos" / origen.name
-    salida = origen / "profundidad_densa"
+    salida = origen / a.salida
     salida.mkdir(exist_ok=True)
     T = np.array(json.loads((origen / "fotogrametria" / "colmap_a_lidar.json").read_text())["matriz"])
-    vistas = cargar_vistas(trabajo, T, a.lado)
+    vistas = cargar_vistas(trabajo, T, a.lado, origen if a.poses == "arkit" else None)
     if a.limite:
         vistas = vistas[:a.limite]
 
