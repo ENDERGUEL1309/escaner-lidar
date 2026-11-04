@@ -5,7 +5,7 @@ import Security
 /// Configuración del servidor de IA en la nube (ver servidor/README.md y docs/ia-nube.md).
 /// La dirección se guarda en `UserDefaults`; el token de acceso, en el llavero del iPhone.
 enum CloudConfig {
-    static let defaultServer = "https://servidor-production-dbef.up.railway.app"
+    static let defaultServer = "https://servidor-production-784c.up.railway.app"
     private static let serverKey = "nube.servidor"
     private static let tokenAccount = "nube.token"
 
