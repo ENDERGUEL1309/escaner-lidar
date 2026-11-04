@@ -293,18 +293,23 @@ async function procesarEscaneo(req, res, id) {
 // con el API_TOKEN; la descarga, la subida y los avisos de progreso usan las mismas URLs firmadas que Modal.
 
 const PC_CONECTADO_MS = 2 * 60 * 1000;
+// El trabajador del PC avisa como mínimo cada 30 s mientras procesa: sin avisos en este tiempo, se cayó (cerraron la
+// ventana, se reinició el PC o falló antes de poder avisar) y el trabajo vuelve a la cola en lugar de quedarse atascado.
+const PC_ABANDONADO_MS = 10 * 60 * 1000;
+const abandonadoPorPC = (e) => e.estado === "procesando" && Date.now() - Date.parse(e.actualizado) > PC_ABANDONADO_MS;
 let ultimaVisitaPC = 0;
 const pcConectado = () => Date.now() - ultimaVisitaPC < PC_CONECTADO_MS;
 
 async function tomarTrabajoPC(req, res) {
   ultimaVisitaPC = Date.now();
   const candidatos = (await almacen.listar())
-    .filter((e) => e.opciones?.tipo === 'malla_pc' && e.estado === 'en_cola')
+    .filter((e) => e.opciones?.tipo === 'malla_pc' && (e.estado === 'en_cola' || abandonadoPorPC(e)))
     .sort((a, b) => Date.parse(a.creado) - Date.parse(b.creado));
   for (const candidato of candidatos) {
     let tomado = false;
     const e = await almacen.actualizar(candidato.id, (e) => {
-      if (e.estado !== 'en_cola') return;
+      if (e.estado !== 'en_cola' && !abandonadoPorPC(e)) return;
+      if (e.estado === 'procesando') console.log(`[pc] ${e.id} sin avisos del PC: se vuelve a entregar`);
       e.estado = 'procesando';
       e.etapa = 'Descargando en tu PC';
       e.progreso = 0;
