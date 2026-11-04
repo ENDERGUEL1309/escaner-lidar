@@ -101,15 +101,19 @@ Límites: 500 MB por archivo, 1 GB por escaneo, 2000 archivos.
 
 Cada cambio se guarda en `edicion.json` con el mismo formato que la app (`dx`, `dy`, `dz`, `yaw` en radianes, `borrado`), así que podría volver al iPhone. Si el escaneo ya se procesó, el editor abre el resultado de la nube; si no, los archivos subidos.
 
-## Desplegar en Railway (cuando toque)
+## Despliegue en Railway
 
-No se ha desplegado nada. Los pasos serían:
+Proyecto `escaner-lidar-ia`, servicio `servidor`: <https://servidor-production-784c.up.railway.app>.
 
-1. Nuevo servicio desde el repositorio de GitHub con *Root Directory* `servidor` (Railway detecta Node y ejecuta `npm start`).
-2. Añadir un **volumen** montado en `/datos` y la variable `DATOS=/datos`.
-3. Definir `API_TOKEN` y `SECRETO_INTERNO`.
-4. Para la IA real: desplegar [`trabajador-gpu/`](../trabajador-gpu/README.md) en Modal y definir `GPU_PROVEEDOR=modal`, `MODAL_URL` y `URL_PUBLICA`.
-5. Más adelante: Postgres para el estado y R2 para los archivos (ver `docs/ia-nube.md` §2 y §9).
+- **Volumen** `servidor-volume` montado en `/datos` (variable `DATOS=/datos`). Un escaneo con fotos ocupa 0,5–1 GB: amplía el volumen en el panel de Railway si se llena.
+- **Variables:** `API_TOKEN` y `SECRETO_INTERNO`, las mismas que `servidor/.api-token` y `servidor/.secreto-interno` de tu PC (el trabajador del PC las lee de ahí).
+- **Desplegar** después de cambiar `servidor/` (desde la raíz del repositorio; en Git Bash, con `MSYS_NO_PATHCONV=1`):
+
+```bash
+railway up servidor --path-as-root --service servidor --ci
+```
+
+- **Post-procesado:** Railway no tiene GPU. Los escaneos marcados como «malla de alta calidad en mi PC» los toma `trabajador-gpu/trabajador_pc.py` en tu PC; los de IA usan Modal con `GPU_PROVEEDOR=modal`, o el modo simulado si no está configurado.
 
 ## Archivos
 

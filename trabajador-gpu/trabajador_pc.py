@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from escaner_ia.comunicacion import Avisador, descargar, subir  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-SERVIDOR = os.environ.get("ESCANER_SERVIDOR", "https://servidor-production-dbef.up.railway.app").rstrip("/")
+SERVIDOR = os.environ.get("ESCANER_SERVIDOR", "https://servidor-production-784c.up.railway.app").rstrip("/")
 CARPETA = Path.home() / "EscaneosPC"
 ESPERA_S = 15
 
