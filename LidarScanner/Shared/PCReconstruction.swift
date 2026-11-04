@@ -195,6 +195,15 @@ struct PCReconstructionSection: View {
                         .font(.headline)
                         .foregroundStyle(.indigo)
                 }
+                if SplatSceneModel.file(in: model.folder) != nil {
+                    NavigationLink {
+                        SplatViewerView(folder: model.folder)
+                    } label: {
+                        Label("Ver el render fotorrealista", systemImage: "camera.aperture")
+                            .font(.headline)
+                            .foregroundStyle(.indigo)
+                    }
+                }
                 if let modeled = model.modeledFile {
                     NavigationLink {
                         MeshPreviewView(url: modeled, title: "Habitación modelada")

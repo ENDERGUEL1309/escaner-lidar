@@ -69,6 +69,7 @@ class Progreso:
         (r"Giro de la habitación:", 0.90, "Ajustando paredes, suelo y techo"),
         (r"Versión ligera", 0.92, "Preparando la versión para el iPhone"),
         (r"Modelado verificado", 0.94, "Modelando los muebles y comprobándolos con las fotos"),
+        (r"Render fotorrealista", 0.95, "Creando el render fotorrealista"),
     ]
 
     # La profundidad densa de COLMAP no escribe nada durante ~45 min: su avance se estima por el tiempo.
@@ -136,6 +137,10 @@ def atender(trabajo: dict):
         shutil.copy2(destino / "malla_movil.ply", subida / "malla_alta.ply")
         if (destino / "escena_modelada.ply").exists():
             shutil.copy2(destino / "escena_modelada.ply", subida / "escena_modelada.ply")
+        render = carpeta / "splats_render" / "escena.splat"
+        if render.exists():
+            (subida / "splats").mkdir(exist_ok=True)
+            shutil.copy2(render, subida / "splats" / "escena.splat")
         avisador.etapa("Subiendo la malla", 0.99)
         subir(subida, trabajo["salida"]["url"])
         avisador.enviar({"estado": "listo", "progreso": 1, "etapa": "Listo", "error": None}, obligatorio=True)

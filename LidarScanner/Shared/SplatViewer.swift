@@ -50,9 +50,11 @@ final class SplatSceneModel {
     var deletedParts: [Part] { parts.filter { edits[$0.id]?.borrado == true } }
     private var editsURL: URL { folder.appendingPathComponent("edicion.json") }
 
+    /// El render de tu PC (más detallado) tiene preferencia sobre la vista previa de la IA en la nube.
     static func file(in folder: URL) -> URL? {
-        let url = folder.appendingPathComponent("ia/splats/escena.splat")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        ["pc/splats/escena.splat", "pc_local/splats/escena.splat", "ia/splats/escena.splat"]
+            .map { folder.appendingPathComponent($0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     // MARK: - Carga y reparto por objetos

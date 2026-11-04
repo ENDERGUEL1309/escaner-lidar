@@ -107,6 +107,14 @@ def procesar(carpeta: Path, max_fotogramas: int = 160, pasos: int = 20_000, tria
         except RuntimeError as error:
             registro(f"    sin modelado: {str(error).splitlines()[-1]}")
 
+    # 7: render fotorrealista de todo el entorno (Gaussian Splatting 3D). Si falla, la malla sigue siendo válida.
+    if not (origen / "splats_render" / "escena.splat").exists():
+        registro("7/7 Render fotorrealista…")
+        try:
+            ejecutar([sys.executable, str(AQUI / "render_splats.py"), str(origen)], registro)
+        except RuntimeError as error:
+            registro(f"    sin render: {str(error).splitlines()[-1]}")
+
     registro(f"Listo en {(time.time() - t0) / 60:.0f} min → {destino}")
     return destino
 
