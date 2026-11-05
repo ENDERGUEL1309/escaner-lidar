@@ -128,6 +128,7 @@ class Panel:
             carpeta = Path(t["carpeta"])
             datos["trabajo"]["imagen"] = (carpeta / "splats_render" / "comparacion.jpg").exists()
             datos["trabajo"]["malla"] = self.malla(carpeta) is not None
+            datos["trabajo"]["remodelada"] = (carpeta / "remodelado" / "habitacion_remodelada.blend").exists()
         datos["gpu"] = self.gpu()
         return datos
 
@@ -167,6 +168,10 @@ class Panel:
         carpeta = self.carpeta_actual()
         malla = self.malla(carpeta) if carpeta else None
         exe = self.blender_exe()
+        remodelada = carpeta / "remodelado" / "habitacion_remodelada.blend" if carpeta else None
+        if exe and remodelada and remodelada.exists():
+            subprocess.Popen([str(exe), str(remodelada)])
+            return "Abriendo la habitación remodelada en Blender…"
         if not malla:
             return "Todavía no hay malla"
         if not exe:

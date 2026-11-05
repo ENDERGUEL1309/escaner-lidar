@@ -148,7 +148,7 @@ function pintarTrabajo(d) {
     <ul class="etapas">${etapas}</ul>
     <div class="acciones">
       <button onclick="accion('/accion/carpeta')">Abrir carpeta</button>
-      <button onclick="accion('/accion/blender')" ${t.malla ? "" : "disabled"}>Ver la malla en Blender</button>
+      <button onclick="accion('/accion/blender')" ${t.malla ? "" : "disabled"}>${t.remodelada ? "Abrir la habitación remodelada en Blender" : "Ver la malla en Blender"}</button>
     </div>
     <div class="aviso" id="aviso">${esc(ultimoAviso)}</div>`;
 }

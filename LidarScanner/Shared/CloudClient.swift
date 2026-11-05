@@ -226,8 +226,16 @@ struct CloudClient {
     /// Lo que necesita la IA de la carpeta del escaneo (igual que servidor/scripts/cliente.js).
     static func filesToUpload(in folder: URL) -> [String] {
         let fm = FileManager.default
-        var files = ["malla_color.ply", "escena.json", "textura.jpg", "edicion.json"]
+        // habitacion.json: paredes, puertas, ventanas y muebles de RoomPlan (con su caja medida) para el remodelado.
+        // sensores.json: bitácora de la grabación (giroscopio, posición y notas de calidad de cada instante).
+        var files = ["malla_color.ply", "escena.json", "textura.jpg", "edicion.json", "habitacion.json", "sensores.json"]
             .filter { fm.fileExists(atPath: folder.appendingPathComponent($0).path) }
+        // Muebles escaneados en detalle con Object Capture: el PC los usa tal cual en vez de generarlos.
+        let detalles = folder.appendingPathComponent("objetos")
+        for id in ((try? fm.contentsOfDirectory(atPath: detalles.path)) ?? []).sorted()
+        where fm.fileExists(atPath: detalles.appendingPathComponent("\(id)/modelo.usdz").path) {
+            files.append("objetos/\(id)/modelo.usdz")
+        }
         for (sub, extensions) in [("objetos", ["ply"]), ("fotos_clave", ["jpg", "jpeg", "prof", "json"]),
                                   ("fotogramas", ["jpg", "prof", "json"])] {
             let dir = folder.appendingPathComponent(sub)

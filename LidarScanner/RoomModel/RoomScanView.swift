@@ -289,6 +289,13 @@ private struct LiveQualityPanel: View {
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.yellow.opacity(0.9), in: Capsule())
                     .foregroundStyle(.black)
+            } else {
+                // El PC remodela cada mueble a partir de una foto donde se vea entero: hay que darle esa vista.
+                Text("Rodea cada mueble grande y apúntalo entero al menos una vez")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .foregroundStyle(.white)
             }
         }
         .padding(.horizontal)

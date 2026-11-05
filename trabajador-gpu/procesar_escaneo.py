@@ -63,6 +63,38 @@ def malla_movil(entrada: Path, salida: Path, triangulos: int, registro):
     registro(f"Malla para el iPhone: {len(f2)} triángulos ({salida.stat().st_size / 1e6:.0f} MB)")
 
 
+HUNYUAN_PY = HERRAMIENTAS / "Hunyuan3D-2" / ".venv" / "Scripts" / "python.exe"
+
+
+def remodelar(origen: Path, registro):
+    """Paso 8: la habitación limpia (planos exactos y muebles generados, encajados y comprobados) montada en Blender.
+    Cada parte es opcional: sin Hunyuan3D-2 los muebles quedan como cajas; sin Blender no hay .blend."""
+    from panel_pc import Panel
+
+    destino = origen / "remodelado"
+    if (destino / "habitacion_remodelada.blend").exists():
+        registro("8/8 Remodelado: ya hecho")
+        return
+    registro("8/8 Remodelado: paredes, suelo y techo exactos…")
+    ejecutar([sys.executable, str(AQUI / "remodelar_envolvente.py"), str(origen)], registro)
+    registro("8/8 Remodelado: muebles y su mejor foto…")
+    ejecutar([sys.executable, str(AQUI / "remodelar_objetos.py"), str(origen)], registro)
+    if HUNYUAN_PY.exists():
+        registro("8/8 Remodelado: generando los muebles con Hunyuan3D-2…")
+        ejecutar([str(HUNYUAN_PY), str(AQUI / "generar_muebles.py"), str(origen)], registro)
+    else:
+        registro(f"    sin Hunyuan3D-2 ({HUNYUAN_PY}): los muebles quedan como cajas")
+    registro("8/8 Remodelado: encajando y comprobando cada mueble con el LiDAR…")
+    ejecutar([sys.executable, str(AQUI / "ajustar_muebles.py"), str(origen)], registro)
+    blender = Panel.blender_exe()
+    if blender:
+        registro("8/8 Remodelado: montando la escena en Blender…")
+        ejecutar([str(blender), "-b", "--factory-startup", "--python", str(AQUI / "blender_remodelado.py"), "--",
+                  str(origen)], registro)
+    else:
+        registro("    sin Blender: no se monta la escena (define BLENDER con la ruta de blender.exe)")
+
+
 def huella(origen: Path, max_fotogramas: int) -> str:
     """Identifica las entradas de la fotogrametría: mismas fotos y poses (camaras.json) y mismo tope de fotogramas."""
     h = hashlib.sha256(str(max_fotogramas).encode())
@@ -158,6 +190,12 @@ def procesar(carpeta: Path, max_fotogramas: int = 160, pasos: int = 20_000, tria
             ejecutar([sys.executable, str(AQUI / "render_splats.py"), str(origen)], registro)
         except RuntimeError as error:
             registro(f"    sin render: {str(error).splitlines()[-1]}")
+
+    # 8: remodelado (escena limpia en Blender). Si falla, todo lo anterior sigue siendo válido.
+    try:
+        remodelar(origen, registro)
+    except RuntimeError as error:
+        registro(f"    sin remodelado: {str(error).splitlines()[-1]}")
 
     registro(f"Listo en {(time.time() - t0) / 60:.0f} min → {destino}")
     return destino

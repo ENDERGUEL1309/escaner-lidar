@@ -78,10 +78,15 @@ class Progreso:
         (r"Versión ligera", 0.64, "Preparando la versión para el iPhone"),
         (r"Modelado verificado", 0.66, "Modelando los muebles y comprobándolos con las fotos"),
         (r"Render fotorrealista", 0.69, "Creando el render fotorrealista"),
+        (r"8/8 Remodelado: paredes", 0.94, "Remodelando: paredes, suelo y techo exactos"),
+        (r"8/8 Remodelado: muebles", 0.95, "Remodelando: separando los muebles"),
+        (r"8/8 Remodelado: generando", 0.955, "Remodelando: generando los muebles con Hunyuan3D-2"),
+        (r"8/8 Remodelado: encajando", 0.97, "Remodelando: comprobando cada mueble con el LiDAR"),
+        (r"8/8 Remodelado: montando", 0.975, "Remodelando: montando la escena en Blender"),
     ]
     # Tramos que avanzan con el número de paso del registro: (etapa, patrón, desde, hasta, total de pasos).
     ENTRENO = (0.33, 0.59)
-    RENDER = (0.70, 0.97, 30_000)
+    RENDER = (0.70, 0.93, 30_000)
 
     # La profundidad densa de COLMAP (solo con --densa) no escribe nada en ~45 min: su avance se estima por el tiempo.
     DENSA_S, DENSA_DESDE, DENSA_HASTA = 45 * 60, 0.14, 0.29
@@ -168,6 +173,10 @@ def atender(trabajo: dict):
         shutil.copy2(destino / "malla_movil.ply", subida / "malla_alta.ply")
         if (destino / "escena_modelada.ply").exists():
             shutil.copy2(destino / "escena_modelada.ply", subida / "escena_modelada.ply")
+        # Habitación remodelada: USDZ para verla en el iPhone (3D y realidad aumentada) y su vista previa.
+        for nombre in ("habitacion_remodelada.usdz", "vista_previa.png"):
+            if (carpeta / "remodelado" / nombre).exists():
+                shutil.copy2(carpeta / "remodelado" / nombre, subida / nombre)
         render = carpeta / "splats_render" / "escena.splat"
         if render.exists():
             (subida / "splats").mkdir(exist_ok=True)

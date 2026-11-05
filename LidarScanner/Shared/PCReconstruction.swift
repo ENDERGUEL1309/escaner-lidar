@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import QuickLook
 import SceneKit
 import simd
 import SwiftUI
@@ -40,6 +41,11 @@ final class PCReconstruction {
     private var jobURL: URL { folder.appendingPathComponent(local ? "pc_local.json" : "pc.json") }
     private var resultsFolder: URL { folder.appendingPathComponent(local ? "pc_local" : "pc", isDirectory: true) }
     var meshFile: URL { resultsFolder.appendingPathComponent("malla_alta.ply") }
+    /// La habitación remodelada por el PC (planos exactos y muebles limpios), para Vista rápida y realidad aumentada.
+    var remodeledFile: URL? {
+        let url = resultsFolder.appendingPathComponent("habitacion_remodelada.usdz")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
     /// La misma habitación con los muebles reconocidos sustituidos por modelos limpios (si el PC pudo modelarlos).
     var modeledFile: URL? {
         let url = resultsFolder.appendingPathComponent("escena_modelada.ply")
@@ -159,6 +165,7 @@ final class PCReconstruction {
 struct PCReconstructionSection: View {
     @State private var model: PCReconstruction
     @State private var showSettings = false
+    @State private var preview: URL?
 
     init(folder: URL, local: Bool = false) {
         _model = State(initialValue: PCReconstruction(folder: folder, local: local))
@@ -205,6 +212,13 @@ struct PCReconstructionSection: View {
                             .foregroundStyle(.indigo)
                     }
                 }
+                if let remodeled = model.remodeledFile {
+                    Button { preview = remodeled } label: {
+                        Label("Ver la habitación remodelada (3D y AR)", systemImage: "arkit")
+                            .font(.headline)
+                            .foregroundStyle(.indigo)
+                    }
+                }
                 if let modeled = model.modeledFile {
                     NavigationLink {
                         MeshPreviewView(url: modeled, title: "Habitación modelada")
@@ -232,6 +246,7 @@ struct PCReconstructionSection: View {
             }
         } header: {
             Text(model.local ? "Mejorar en PC" : "Malla de alta calidad (tu PC)")
+                .quickLookPreview($preview)
         } footer: {
             Text(model.local
                  ? "Envía el escaneo por la Wi-Fi a tu PC (pc-windows-server) y recibe OBJ, GLB, USDZ y plano DXF. El iPhone y el PC deben estar en la misma red."
