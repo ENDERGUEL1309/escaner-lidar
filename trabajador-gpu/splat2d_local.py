@@ -127,19 +127,63 @@ def profundidad_lidar(vertices: torch.Tensor, w2c: np.ndarray, K: np.ndarray, an
     return prof[0, 0]
 
 
+def lidar_con_poses_colmap(origen: Path, trabajo: Path, por_vista: int = 3000) -> np.ndarray:
+    """Profundidad LiDAR de cada foto (su .prof) llevada al mundo de COLMAP con la pose ajustada de esa foto."""
+    from escaner_ia.camaras import leer_profundidad
+    from escaner_ia.fotogrametria import _rotacion
+    from profundidad_densa import prompts_reales
+
+    infos = {}
+    for sub in ("fotos_clave", "fotogramas"):
+        indice = origen / sub / "camaras.json"
+        if indice.exists():
+            for f in json.loads(indice.read_text("utf-8"))["fotos"]:
+                if isinstance(f.get("profundidad"), dict):
+                    infos[f"{sub[:3]}_{Path(f['archivo']).stem}.jpg"] = f["profundidad"]
+    reales = prompts_reales(origen)
+    rng = np.random.default_rng(1)
+    puntos = []
+    lineas = [l for l in (trabajo / "sparse" / "ajustada" / "images.txt").read_text().splitlines()
+              if l.strip() and not l.startswith("#")][::2]
+    for linea in lineas:
+        p = linea.split()
+        nombre = p[9]
+        if nombre not in reales or nombre not in infos:
+            continue
+        prof = leer_profundidad(reales[nombre], infos[nombre])
+        if prof is None:
+            continue
+        v, u = np.nonzero(prof.mapa > 0)
+        if len(v) == 0:
+            continue
+        k = rng.choice(len(v), min(por_vista, len(v)), replace=False)
+        z = prof.mapa[v[k], u[k]]
+        camara = np.stack([(u[k] - prof.cx) / prof.fx * z, (v[k] - prof.cy) / prof.fy * z, z], 1)
+        R, t = _rotacion(list(map(float, p[1:5]))), np.array(list(map(float, p[5:8])))
+        puntos.append((camara - t) @ R)               # cámara → mundo de COLMAP
+    if not puntos:
+        raise RuntimeError("Sin nube densa ni profundidad LiDAR por foto: no se puede alinear con el LiDAR")
+    return np.concatenate(puntos).astype(np.float32)
+
+
 def alinear_con_lidar(origen: Path, trabajo: Path, ruta: Path, registro=print) -> np.ndarray:
     """Transformación del modelo COLMAP al mundo de la malla LiDAR: similitud que lleva las cámaras ajustadas a las
     de ARKit (corrige la escala libre del ajuste de haces) y ICP de la nube densa contra la malla LiDAR (corrige los
     centímetros y grados de diferencia entre las poses de ARKit y la fusión de la app)."""
     from scipy.spatial import cKDTree
 
-    from escaner_ia.fotogrametria import nube_inicial, similitud_arkit
+    from escaner_ia.fotogrametria import similitud_arkit
 
     camaras = json.loads((trabajo / "camaras.json").read_text())
     T = similitud_arkit(trabajo / "sparse" / "ajustada" / "images.txt", camaras)
-    densa, _ = nube_inicial(trabajo)
     lidar, _ = leer_ply(origen / "malla_color.ply")
     rng = np.random.default_rng(0)
+    if (trabajo / "dense" / "fused.ply").exists():
+        densa, _ = leer_ply(trabajo / "dense" / "fused.ply")
+    else:
+        # Sin nube densa, los puntos del ajuste de haces son demasiado ruidosos para el ICP (lo desviaban 7°):
+        # se usa el LiDAR de cada foto colocado con su pose de COLMAP, que es justo lo que el entrenamiento compara.
+        densa = lidar_con_poses_colmap(origen, trabajo)
     fuente = densa[rng.choice(len(densa), min(60_000, len(densa)), replace=False)].astype(np.float64)
     fuente = fuente @ T[:3, :3].T + T[:3, 3]
     arbol = cKDTree(lidar[rng.choice(len(lidar), min(500_000, len(lidar)), replace=False)])
@@ -155,6 +199,8 @@ def alinear_con_lidar(origen: Path, trabajo: Path, ruta: Path, registro=print) -
         Ri = Vt.T @ np.diag([1, 1, np.sign(np.linalg.det(Vt.T @ U.T))]) @ U.T
         R, t = Ri @ R, Ri @ t + mb - Ri @ ma
     d1 = arbol.query(fuente @ R.T + t)[0]
+    if np.median(d1) >= np.median(d0):
+        R, t, d1 = np.eye(3), np.zeros(3), d0          # el ICP no mejoró nada: mejor no tocar
     C = np.eye(4)
     C[:3, :3], C[:3, 3] = R, t
     T = C @ T
