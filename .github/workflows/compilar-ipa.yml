@@ -51,10 +51,34 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build | tee xcodebuild.log
 
+      # Profundidad a partir del color (Depth Anything V2 Small de Apple, Apache-2.0). Si la descarga falla, la app
+      # funciona igual y la validación «Color frente a LiDAR» simplemente no aparece.
+      - name: Modelo de profundidad por color
+        continue-on-error: true
+        run: |
+          python3 - <<'EOF'
+          import json, os, urllib.request
+          repo = "apple/coreml-depth-anything-v2-small"
+          prefix = "DepthAnythingV2SmallF16.mlpackage/"
+          info = json.load(urllib.request.urlopen(f"https://huggingface.co/api/models/{repo}"))
+          for f in (s["rfilename"] for s in info["siblings"]):
+              if f.startswith(prefix):
+                  os.makedirs(os.path.join("modelos", os.path.dirname(f)), exist_ok=True)
+                  urllib.request.urlretrieve(f"https://huggingface.co/{repo}/resolve/main/{f}", os.path.join("modelos", f))
+                  print(f)
+          EOF
+          xcrun coremlcompiler compile modelos/DepthAnythingV2SmallF16.mlpackage modelos/
+          ls -la modelos/DepthAnythingV2SmallF16.mlmodelc
+
       - name: Empaquetar IPA
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/LidarScanner.app Payload/
+          if [ -d modelos/DepthAnythingV2SmallF16.mlmodelc ]; then
+            cp -R modelos/DepthAnythingV2SmallF16.mlmodelc Payload/LidarScanner.app/
+          else
+            echo "::warning::Sin el modelo de profundidad por color"
+          fi
           # Sideloadly instala lo que haya: mejor fallar aquí que descubrir en el iPhone que falta el icono o los shaders.
           test -f Payload/LidarScanner.app/Assets.car
           test -f Payload/LidarScanner.app/default.metallib

@@ -269,6 +269,10 @@ private struct LiveQualityPanel: View {
                 chip("Giro", "gyroscope", quality.steady)
                 chip("Posición", "location", quality.tracking && quality.imuAgrees)
             }
+            HStack(spacing: 4) {
+                chip(quality.colorAgreement.map { "Color \(Int($0 * 100))%" } ?? "Color —", "paintpalette", quality.colorOK)
+                chip("Reflejos", "sun.haze", quality.glare <= 0.08)
+            }
             if let hint = quality.hint {
                 Text(hint)
                     .font(.caption.weight(.semibold))

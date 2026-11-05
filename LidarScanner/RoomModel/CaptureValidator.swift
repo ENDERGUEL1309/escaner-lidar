@@ -12,7 +12,12 @@ struct LiveQuality: Equatable {
     var steady = false         // giroscopio: giro lento, sin foto movida
     var tracking = false       // posición: seguimiento visual-inercial de ARKit normal
     var imuAgrees = true       // posición frente a giroscopio: el giro de ARKit coincide con el del giroscopio
+    var glare: Float = 0       // filtro de color: fracción de píxeles quemados (reflejos)
+    /// Profundidad del color frente al LiDAR: fracción que coincide a menos del 5 %. `nil` sin el modelo.
+    var colorAgreement: Float?
     var hint: String?
+
+    var colorOK: Bool { (colorAgreement ?? 1) >= 0.6 }
 
     var lidarOK: Bool { lidar >= 0.6 }
     var distanceOK: Bool { distance >= 0.3 && distance <= 4 }
@@ -49,6 +54,8 @@ struct ValidationFrame {
     var steady: Bool
     var tracking: Bool
     var imuAgrees: Bool
+    /// Profundidad deducida del color, ya en metros (vacía sin el modelo).
+    var colorDepth: [Float] = []
 
     var good: Bool { sharp && light && steady && tracking && imuAgrees }
 }
@@ -68,6 +75,7 @@ final class CaptureValidator {
     private var lastPose: simd_quatf?                           // solo desde `queue`
     private var lastAttitude: simd_quatf?                       // solo desde `queue`
     private var isBusy = false                                  // solo desde main
+    private lazy var colorDepth = ColorDepth()                  // solo desde `queue`
     private static let maxFrames = 1500
 
     var onQuality: ((LiveQuality) -> Void)?
@@ -108,29 +116,30 @@ final class CaptureValidator {
         }
     }
 
-    /// Nitidez (varianza del laplaciano) y brillo medio del plano de luminancia, en una rejilla central.
-    private static func luma(_ buffer: CVPixelBuffer) -> (sharpness: Float, brightness: Float) {
+    /// Nitidez (varianza del laplaciano), brillo medio y reflejos (píxeles quemados) del plano de luminancia.
+    private static func luma(_ buffer: CVPixelBuffer) -> (sharpness: Float, brightness: Float, glare: Float) {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         guard CVPixelBufferGetPlaneCount(buffer) >= 1,
-              let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return (0, 0) }
+              let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return (0, 0, 0) }
         let w = CVPixelBufferGetWidthOfPlane(buffer, 0), h = CVPixelBufferGetHeightOfPlane(buffer, 0)
         let row = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
         let p = base.assumingMemoryBound(to: UInt8.self)
         func g(_ x: Int, _ y: Int) -> Float { Float(p[y * row + x]) }
-        var sum: Float = 0, squares: Float = 0, bright: Float = 0, n: Float = 0
+        var sum: Float = 0, squares: Float = 0, bright: Float = 0, burnt: Float = 0, n: Float = 0
         for y in stride(from: h / 6, to: h * 5 / 6, by: 4) {
             for x in stride(from: w / 6, to: w * 5 / 6, by: 4) {
                 let l = g(x - 1, y) + g(x + 1, y) + g(x, y - 1) + g(x, y + 1) - 4 * g(x, y)
                 sum += l
                 squares += l * l
                 bright += g(x, y)
+                if g(x, y) > 250 { burnt += 1 }
                 n += 1
             }
         }
-        guard n > 0 else { return (0, 0) }
+        guard n > 0 else { return (0, 0, 0) }
         let mean = sum / n
-        return (squares / n - mean * mean, bright / n)
+        return (squares / n - mean * mean, bright / n, burnt / n)
     }
 
     private static func angle(_ q: simd_quatf) -> Float {
@@ -144,7 +153,8 @@ final class CaptureValidator {
         q.tracking = tracking
 
         // Cámara: nitidez relativa a la media de la grabación (depende de la escena) y exposición.
-        let (sharpness, brightness) = Self.luma(buffer)
+        let (sharpness, brightness, glare) = Self.luma(buffer)
+        q.glare = glare
         q.sharp = sharpnessCount < 5 || sharpness >= sharpnessMean * 0.6
         sharpnessMean = (sharpnessMean * sharpnessCount + sharpness) / (sharpnessCount + 1)
         sharpnessCount = min(sharpnessCount + 1, 200)
@@ -185,13 +195,23 @@ final class CaptureValidator {
             if !values.isEmpty { q.distance = values.sorted()[values.count / 2] }
         }
 
+        // Color: profundidad deducida de la foto, ajustada al LiDAR; el desacuerdo marca lo dudoso.
+        var colorMeters: [Float] = []
+        if rw > 0, let colorDepth, let disparity = colorDepth.disparity(buffer, width: rw, height: rh),
+           let aligned = ColorDepth.align(disparity: disparity, lidar: reduced) {
+            colorMeters = aligned.depth
+            q.colorAgreement = aligned.agreement
+        }
+
         q.hint = !q.tracking ? "Muévete despacio y apunta a zonas con detalle para recuperar la posición"
             : !q.light ? "Luz insuficiente o excesiva: enciende luces o evita contraluces"
             : !q.steady ? "Gira más despacio"
             : !q.sharp ? "Foto movida: sostén el iPhone firme un momento"
             : q.distance > 4 ? "Acércate: a más de 4 m el LiDAR pierde precisión"
             : (q.distance > 0 && q.distance < 0.3) ? "Aléjate un poco: demasiado cerca para el LiDAR"
+            : q.glare > 0.08 ? "Reflejos fuertes: cambia el ángulo para que la luz no rebote hacia la cámara"
             : !q.lidarOK ? "El LiDAR no mide bien aquí (cristal, espejo, negro o muy lejos): prueba otro ángulo"
+            : !q.colorOK ? "Color y LiDAR no coinciden aquí (cristal, espejo o reflejo): grábalo desde otro ángulo"
             : !q.imuAgrees ? "El seguimiento se desvía del giroscopio: vuelve despacio a una zona ya grabada"
             : nil
 
@@ -200,7 +220,8 @@ final class CaptureValidator {
             let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
                 .scaled(sx: Float(rw) / Float(resolution.width), sy: Float(rh) / Float(resolution.height))
             frames.append(ValidationFrame(camera: model, depth: reduced, width: rw, height: rh, sharp: q.sharp,
-                                          light: q.light, steady: q.steady, tracking: q.tracking, imuAgrees: q.imuAgrees))
+                                          light: q.light, steady: q.steady, tracking: q.tracking, imuAgrees: q.imuAgrees,
+                                          colorDepth: colorMeters))
         }
         return q
     }
@@ -262,6 +283,7 @@ final class CaptureValidator {
         var measured = 0, expected = 0
         var residuals: [Float] = []
         var outside = 0, compared = 0
+        var colorCompared = 0, colorAgree = 0
 
         for f in frames {
             var visible = 0
@@ -277,6 +299,13 @@ final class CaptureValidator {
                 visible += 1
                 measured += 1
                 frameResiduals.append(d - pr.z)
+                if f.good, !f.colorDepth.isEmpty {
+                    let c = f.colorDepth[Int(pr.v) * f.width + Int(pr.u)]
+                    if c > 0 {
+                        colorCompared += 1
+                        if abs(c - d) / d < 0.05 { colorAgree += 1 }
+                    }
+                }
             }
             guard visible >= max(3, points.count / 4) else { continue }
             views += 1
@@ -330,6 +359,13 @@ final class CaptureValidator {
             checks.append(.init(name: "Profundidad", passed: ok,
                                 detail: compared == 0 ? "sin medir"
                                     : ok ? "lo medido cabe en sus medidas" : "\(percent(outsideFraction)) de lo medido sobresale: medidas cortas o mal colocado"))
+        }
+        if colorCompared >= 10 {
+            let agreement = Float(colorAgree) / Float(colorCompared)
+            let ok = agreement >= 0.7
+            checks.append(.init(name: "Color frente a LiDAR", passed: ok,
+                                detail: ok ? "la profundidad deducida del color coincide en un \(percent(agreement))"
+                                    : "solo coincide en un \(percent(agreement)): posible cristal, reflejo o superficie difícil"))
         }
         let stableOK = views > 0 && Float(stableViews) / Float(views) >= 0.9
         checks.append(.init(name: "Posición y giroscopio", passed: stableOK,
