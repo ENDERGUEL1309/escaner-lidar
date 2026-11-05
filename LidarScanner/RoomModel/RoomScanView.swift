@@ -162,8 +162,9 @@ private final class RoomKeyframeSampler {
 
 /// Controlador de RoomPlan: su propia sesión de ARKit, su guía en pantalla y su resultado procesado.
 final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate {
-    var onFinished: ((CapturedRoom, [Keyframe]) -> Void)?
+    var onFinished: ((CapturedRoom, [Keyframe], [ValidationFrame]) -> Void)?
     var onFailed: ((String) -> Void)?
+    var onQuality: ((LiveQuality) -> Void)?
 
     // RoomCaptureViewDelegate hereda de la codificación de objetos, aunque aquí nunca se archiva.
     static var supportsSecureCoding: Bool { false }
@@ -172,6 +173,7 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
     private var timer: Timer?
     private var isStopped = false
     private let sampler = RoomKeyframeSampler()
+    private let validator = CaptureValidator()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -184,11 +186,16 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
+        validator.onQuality = { [weak self] quality in self?.onQuality?(quality) }
+        validator.start()
         timer = Timer.scheduledTimer(timeInterval: 0.3, target: self, selector: #selector(sampleFrame), userInfo: nil, repeats: true)
     }
 
     @objc private func sampleFrame() {
-        if let frame = captureView.captureSession.arSession.currentFrame { sampler.consider(frame) }
+        if let frame = captureView.captureSession.arSession.currentFrame {
+            sampler.consider(frame)
+            validator.consider(frame)
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -201,6 +208,7 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
         isStopped = true
         timer?.invalidate()
         timer = nil
+        validator.stop()
         captureView?.captureSession.stop()
     }
 
@@ -213,25 +221,64 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
         if let error {
             onFailed?(error.localizedDescription)
         } else {
-            onFinished?(processedResult, sampler.collected())
+            onFinished?(processedResult, sampler.collected(), validator.collected())
         }
     }
 }
 
 private struct RoomCaptureContainer: UIViewControllerRepresentable {
     @Binding var stopRequested: Bool
-    let onFinished: (CapturedRoom, [Keyframe]) -> Void
+    let onFinished: (CapturedRoom, [Keyframe], [ValidationFrame]) -> Void
     let onFailed: (String) -> Void
+    let onQuality: (LiveQuality) -> Void
 
     func makeUIViewController(context: Context) -> RoomCaptureViewController {
         let controller = RoomCaptureViewController()
         controller.onFinished = onFinished
         controller.onFailed = onFailed
+        controller.onQuality = onQuality
         return controller
     }
 
     func updateUIViewController(_ controller: RoomCaptureViewController, context: Context) {
         if stopRequested { controller.stopCapture() }
+    }
+}
+
+/// Semáforo en vivo de cada fuente: lo que está verde ya está aportando datos fiables en este instante.
+private struct LiveQualityPanel: View {
+    let quality: LiveQuality
+
+    private func chip(_ title: String, _ icon: String, _ ok: Bool) -> some View {
+        Label(title, systemImage: icon)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background((ok ? Color.green : Color.red).opacity(0.85), in: Capsule())
+            .foregroundStyle(.white)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 4) {
+                chip("Cámara", "camera", quality.sharp)
+                chip("Luz", "sun.max", quality.light)
+                chip("LiDAR \(Int(quality.lidar * 100))%", "dot.radiowaves.left.and.right", quality.lidarOK)
+            }
+            HStack(spacing: 4) {
+                chip(String(format: "%.1f m", quality.distance), "ruler", quality.distanceOK)
+                chip("Giro", "gyroscope", quality.steady)
+                chip("Posición", "location", quality.tracking && quality.imuAgrees)
+            }
+            if let hint = quality.hint {
+                Text(hint)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.yellow.opacity(0.9), in: Capsule())
+                    .foregroundStyle(.black)
+            }
+        }
+        .padding(.horizontal)
+        .allowsHitTesting(false)
     }
 }
 
@@ -242,6 +289,8 @@ struct RoomScanView: View {
     @State private var stopRequested = false
     @State private var editor: RoomEditorModel?
     @State private var failure: String?
+    @State private var quality = LiveQuality()
+    @State private var isValidating = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -251,13 +300,32 @@ struct RoomScanView: View {
                 ContentUnavailableView("No se pudo capturar la habitación", systemImage: "exclamationmark.triangle",
                                        description: Text(failure))
             } else {
-                RoomCaptureContainer(stopRequested: $stopRequested) { room, keyframes in
-                    editor = RoomEditorModel(room: RoomModelBuilder.build(from: room), keyframes: keyframes)
+                RoomCaptureContainer(stopRequested: $stopRequested) { room, keyframes, frames in
+                    isValidating = true
+                    let model = RoomModelBuilder.build(from: room)
+                    Task {
+                        let validated = await Task.detached(priority: .userInitiated) {
+                            CaptureValidator.validate(room: model, frames: frames)
+                        }.value
+                        editor = RoomEditorModel(room: validated, keyframes: keyframes, validationFrames: frames)
+                        isValidating = false
+                    }
                 } onFailed: { message in
                     failure = message
+                } onQuality: { q in
+                    quality = q
                 }
                 .ignoresSafeArea()
+                if isValidating {
+                    ProgressView("Validando paredes y muebles con todos los sensores…")
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .frame(maxHeight: .infinity)
+                }
                 if !stopRequested {
+                    LiveQualityPanel(quality: quality)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 8)
                     Button { stopRequested = true } label: {
                         Label("Terminar habitación", systemImage: "checkmark.circle.fill").font(.headline)
                     }

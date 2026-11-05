@@ -23,13 +23,16 @@ final class RoomEditorModel {
     private(set) var revision = 0
 
     @ObservationIgnored let keyframes: [Keyframe]
+    /// Registros de la grabación para revalidar un mueble cuando cambia (no se guardan en disco).
+    @ObservationIgnored let validationFrames: [ValidationFrame]
     /// Carpeta de la habitación: habitacion.json se guarda solo y los objetos detallados van en objetos/.
     @ObservationIgnored let folder: URL
     @ObservationIgnored let builder: RoomSceneBuilder
 
-    init(room: RoomModel, keyframes: [Keyframe], folder: URL? = nil) {
+    init(room: RoomModel, keyframes: [Keyframe], validationFrames: [ValidationFrame] = [], folder: URL? = nil) {
         self.room = room
         self.keyframes = keyframes
+        self.validationFrames = validationFrames
         let folder = folder ?? (try? ScanStorage.newScanFolder(prefix: "Habitacion"))
             ?? FileManager.default.temporaryDirectory
         self.folder = folder
@@ -48,6 +51,14 @@ final class RoomEditorModel {
 
     func save() {
         try? ModelExporter.writeJSON(room, to: Self.jsonURL(in: folder))
+    }
+
+    /// Vuelve a pasar las validaciones de sensores a un mueble movido, girado o escaneado en detalle.
+    private func revalidate(_ id: UUID?) {
+        guard !validationFrames.isEmpty, let i = room.furniture.firstIndex(where: { $0.id == id }) else { return }
+        let s = CaptureValidator.samples(of: room.furniture[i])
+        room.furniture[i].validation = CaptureValidator.validate(points: s.points, normals: s.normals, isWall: false,
+                                                                 frames: validationFrames)
     }
 
     private func changed() {
@@ -81,6 +92,7 @@ final class RoomEditorModel {
             f = room.snappedToWall(f)
             room.furniture[i] = f
             selectedID = id
+            revalidate(id)
             let cm = { (v: SIMD3<Float>) in "\(Int((v.x * 100).rounded())) × \(Int((v.y * 100).rounded())) × \(Int((v.z * 100).rounded())) cm" }
             detailMessage = "\(f.name): \(cm(detail.measured)) medido en detalle (RoomPlan decía \(cm(detail.roomPlanSize)))."
             changed()
@@ -134,6 +146,7 @@ final class RoomEditorModel {
     /// Al soltar: si quedó junto a una pared, se alinea y se pega a ella.
     func snapSelected() {
         edit { f in f = room.snappedToWall(f) }
+        revalidate(selectedID)
         save()
     }
 
@@ -524,6 +537,7 @@ struct RoomEditorView: View {
             if let area = model.room.floorArea {
                 Text("Suelo: \(area, specifier: "%.2f") m²").font(.caption.monospacedDigit())
             }
+            wallList
             Text("En detalle \(model.detailedCount) · Verdes \(count(.green)) · Amarillos \(count(.yellow)) · Rojos \(count(.red)). Toca un mueble y pulsa «Escanear en detalle» para cambiar su caja por el objeto real.")
                 .font(.caption).foregroundStyle(.secondary)
             if let message = model.detailMessage {
@@ -532,6 +546,37 @@ struct RoomEditorView: View {
             if model.keyframes.isEmpty {
                 Text("Sin fotos de esta captura: las cajas no se pueden verificar.").font(.caption).foregroundStyle(.orange)
             }
+        }
+    }
+
+    /// Medidas de cada pared y cuántas validaciones de sensores supera.
+    private var wallList: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(model.room.walls.enumerated()), id: \.element.id) { i, wall in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pared \(i + 1)").font(.caption2.bold())
+                        Text("\(wall.width, specifier: "%.2f") × \(wall.height, specifier: "%.2f") m").font(.caption2.monospacedDigit())
+                        if let v = wall.validation {
+                            Text("\(v.passed)/\(v.checks.count) validaciones").font(.caption2)
+                                .foregroundStyle(v.state == .green ? .green : v.state == .yellow ? .yellow : .red)
+                        }
+                    }
+                    .padding(6)
+                    .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                    .help(wall.validation?.advice ?? "")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func sensorChecks(_ v: ElementValidation) -> some View {
+        Text("Validaciones de sensores: \(v.passed) de \(v.checks.count)").font(.caption.bold())
+            .foregroundStyle(v.state == .green ? .green : v.state == .yellow ? .yellow : .red)
+        ForEach(v.checks) { c in
+            Label("\(c.name): \(c.detail)", systemImage: c.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.caption2)
+                .foregroundStyle(c.passed ? Color.secondary : Color.orange)
         }
     }
 
@@ -557,6 +602,7 @@ struct RoomEditorView: View {
             .buttonStyle(.bordered)
             Text("\(f.parts.count) piezas · \(f.size.x * 100, specifier: "%.0f") × \(f.size.y * 100, specifier: "%.0f") × \(f.size.z * 100, specifier: "%.0f") cm")
                 .font(.caption.monospacedDigit())
+            if let v = f.validation { sensorChecks(v) }
             if f.detail == nil {
                 Text(reportText(f))
                     .font(.caption2.monospacedDigit())

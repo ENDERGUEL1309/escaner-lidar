@@ -55,7 +55,9 @@ final class RoomSceneBuilder {
 
         for (i, wall) in room.walls.enumerated() {
             let box = SCNBox(width: CGFloat(wall.width), height: CGFloat(wall.height), length: 0.04, chamferRadius: 0)
-            box.firstMaterial?.diffuse.contents = UIColor(white: 0.85, alpha: labels ? 0.35 : 1)
+            box.firstMaterial?.diffuse.contents = labels && wall.validation != nil
+                ? Self.color(for: wall.validation!.state).withAlphaComponent(0.3)
+                : UIColor(white: 0.85, alpha: labels ? 0.35 : 1)
             box.firstMaterial?.isDoubleSided = true
             let node = SCNNode(geometry: box)
             node.name = "Pared_\(i + 1)"
@@ -64,7 +66,8 @@ final class RoomSceneBuilder {
             result.append(node)
             if labels {
                 let top = SIMD3(wall.center.x, room.floorY + wall.height + 0.08, wall.center.z)
-                result.append(Self.label("\(Self.meters(wall.width)) × \(Self.meters(wall.height))", at: top))
+                let checks = wall.validation.map { " · \($0.passed)/\($0.checks.count) ✓" } ?? ""
+                result.append(Self.label("\(Self.meters(wall.width)) × \(Self.meters(wall.height))\(checks)", at: top))
             }
         }
 

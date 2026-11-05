@@ -75,6 +75,8 @@ struct ParametricFurniture: Codable, Identifiable {
     var report = VerificationReport()
     /// Modelo real escaneado en detalle con Object Capture. Sustituye a las cajas al dibujar y exportar.
     var detail: DetailModel?
+    /// Validaciones cruzadas de cámara, LiDAR, giroscopio, posición y ángulos (CaptureValidator).
+    var validation: ElementValidation?
 
     init(name: String, kind: FurnitureKind, position: SIMD3<Float>, yaw: Float, size: SIMD3<Float>) {
         self.name = name
@@ -222,6 +224,7 @@ struct RoomWall: Codable, Identifiable {
     var height: Float
     /// Normal hacia el interior de la habitación.
     var normal: SIMD3<Float>
+    var validation: ElementValidation?
 
     /// Dirección a lo largo de la pared.
     var tangent: SIMD3<Float> { simd_normalize(simd_cross(SIMD3(0, 1, 0), normal)) }
