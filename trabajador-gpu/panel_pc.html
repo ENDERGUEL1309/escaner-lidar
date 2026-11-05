@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trabajador del PC</title>
+<style>
+  :root {
+    --fondo: #f4f5f7; --tarjeta: #ffffff; --texto: #1d2129; --suave: #6b7280; --borde: #e3e6ea;
+    --acento: #4f46e5; --ok: #16a34a; --error: #dc2626; --aviso: #d97706; --barra: #e8eaf0; --codigo: #0f172a;
+    --codigo-texto: #d6deeb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #0f1115; --tarjeta: #171a21; --texto: #e6e8ec; --suave: #9aa3af; --borde: #262b35;
+      --acento: #818cf8; --ok: #22c55e; --error: #f87171; --aviso: #fbbf24; --barra: #262b35; --codigo: #0b0d12;
+      --codigo-texto: #c9d1d9;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--suave); margin: 0 0 10px; }
+  .chip { font-size: 13px; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--borde); background: var(--tarjeta); }
+  .chip.ok::before, .chip.mal::before { content: "●"; margin-right: 6px; }
+  .chip.ok::before { color: var(--ok); } .chip.mal::before { color: var(--error); }
+  .rejilla { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+  @media (max-width: 820px) { .rejilla { grid-template-columns: 1fr; } }
+  .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 14px; padding: 16px; }
+  .nombre { font-size: 18px; font-weight: 600; margin-bottom: 2px; word-break: break-all; }
+  .sub { color: var(--suave); font-size: 13px; }
+  .barra { height: 12px; border-radius: 99px; background: var(--barra); overflow: hidden; margin: 14px 0 8px; }
+  .barra > div { height: 100%; background: var(--acento); width: 0; transition: width .6s ease; }
+  .barra.listo > div { background: var(--ok); } .barra.error > div { background: var(--error); }
+  .fila { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .grande { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .etapas { list-style: none; margin: 14px 0 0; padding: 0; }
+  .etapas li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--borde);
+               font-size: 14px; }
+  .etapas li .t { color: var(--suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .etapas li.actual { font-weight: 600; } .etapas li.actual .t { color: var(--acento); }
+  .metrica { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .metrica b { font-variant-numeric: tabular-nums; }
+  .mini { height: 6px; border-radius: 99px; background: var(--barra); overflow: hidden; margin-bottom: 6px; }
+  .mini > div { height: 100%; background: var(--acento); }
+  pre { background: var(--codigo); color: var(--codigo-texto); border-radius: 10px; padding: 12px; margin: 0;
+        height: 320px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+  button { font: inherit; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--borde);
+           background: var(--tarjeta); color: var(--texto); cursor: pointer; }
+  button:hover { border-color: var(--acento); }
+  button:disabled { opacity: .45; cursor: default; }
+  .acciones { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .aviso { font-size: 13px; color: var(--suave); min-height: 18px; margin-top: 8px; }
+  img.comp { width: 100%; border-radius: 10px; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { text-align: left; padding: 7px 6px; border-top: 1px solid var(--borde); }
+  th { color: var(--suave); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; border-top: 0; }
+  .estado-listo { color: var(--ok); } .estado-error { color: var(--error); } .estado-procesando { color: var(--acento); }
+  .vacio { color: var(--suave); padding: 24px 0; text-align: center; }
+  .seccion { margin-top: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Trabajador del PC</h1>
+    <span id="servidor" class="chip">Conectando…</span>
+  </header>
+
+  <div class="rejilla">
+    <section class="tarjeta" id="trabajo">
+      <h2>Escaneo</h2>
+      <div class="vacio">Esperando escaneos desde el iPhone…</div>
+    </section>
+
+    <aside class="tarjeta">
+      <h2>GPU</h2>
+      <div id="gpu" class="sub">Sin datos</div>
+    </aside>
+  </div>
+
+  <section class="tarjeta seccion" id="caja-comparacion" hidden>
+    <h2>Render frente a la foto (vistas que el modelo no vio al entrenar)</h2>
+    <img class="comp" id="comparacion" alt="Comparación foto y render">
+  </section>
+
+  <section class="tarjeta seccion">
+    <h2>Registro en vivo</h2>
+    <pre id="registro"></pre>
+  </section>
+
+  <section class="tarjeta seccion">
+    <h2>Últimos trabajos</h2>
+    <div id="historial" class="vacio">Todavía ninguno</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const dur = (s) => {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  return h ? `${h} h ${m} min` : m ? `${m} min ${ss.toString().padStart(2, "0")} s` : `${ss} s`;
+};
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let imagenVista = null, seguirRegistro = true, ultimoAviso = "";
+
+$("registro").addEventListener("scroll", (e) => {
+  const p = e.target; seguirRegistro = p.scrollTop + p.clientHeight >= p.scrollHeight - 20;
+});
+
+async function accion(ruta) {
+  const aviso = $("aviso");
+  try {
+    const r = await fetch(ruta, {method: "POST", headers: {"X-Panel": "1"}});
+    const d = await r.json();
+    ultimoAviso = d.mensaje;
+  } catch { ultimoAviso = "No se pudo"; }
+  if (aviso) aviso.textContent = ultimoAviso;
+}
+
+function pintarTrabajo(d) {
+  const t = d.trabajo, caja = $("trabajo");
+  if (!t) { caja.innerHTML = '<h2>Escaneo</h2><div class="vacio">Esperando escaneos desde el iPhone…</div>'; return; }
+  const fin = t.fin || d.ahora, transcurrido = fin - t.inicio, pct = Math.round(t.valor * 100);
+  let resto = "";
+  if (d.en_curso && t.valor > 0.08) resto = `· quedan unos ${dur(transcurrido / t.valor * (1 - t.valor))}`;
+  const titulo = d.en_curso ? "Procesando" : t.estado === "listo" ? "Terminado" : "Falló";
+  const etapas = t.etapas.map((e, i) => {
+    const actual = d.en_curso && i === t.etapas.length - 1;
+    const tiempo = dur((e.fin || d.ahora) - e.inicio);
+    return `<li class="${actual ? "actual" : ""}"><span>${esc(e.texto)}</span><span class="t">${actual ? "en curso · " : ""}${tiempo}</span></li>`;
+  }).join("");
+  const calidad = t.calidad ? ` · calidad del render ${t.calidad.psnr_reservadas} dB` : "";
+  caja.innerHTML = `
+    <h2>${titulo}</h2>
+    <div class="nombre">${esc(t.nombre)}</div>
+    <div class="sub">${esc(t.carpeta)}</div>
+    <div class="barra ${t.estado}"><div style="width:${pct}%"></div></div>
+    <div class="fila">
+      <span class="grande">${pct} %</span>
+      <span class="sub">${esc(t.etapa)}<br>${dur(transcurrido)} ${resto}${calidad}</span>
+    </div>
+    ${t.error ? `<p class="estado-error">${esc(t.error)}</p>` : ""}
+    <ul class="etapas">${etapas}</ul>
+    <div class="acciones">
+      <button onclick="accion('/accion/carpeta')">Abrir carpeta</button>
+      <button onclick="accion('/accion/blender')" ${t.malla ? "" : "disabled"}>Ver la malla en Blender</button>
+    </div>
+    <div class="aviso" id="aviso">${esc(ultimoAviso)}</div>`;
+}
+
+function pintarGPU(g) {
+  if (!g) { $("gpu").textContent = "Sin datos (nvidia-smi no responde)"; return; }
+  const mem = Math.round(g.usada / g.total * 100);
+  $("gpu").innerHTML = `
+    <div class="nombre" style="font-size:15px">${esc(g.nombre)}</div>
+    <div class="metrica"><span>Uso</span><b>${g.uso} %</b></div><div class="mini"><div style="width:${g.uso}%"></div></div>
+    <div class="metrica"><span>Memoria</span><b>${(g.usada / 1024).toFixed(1)} / ${(g.total / 1024).toFixed(1)} GB</b></div>
+    <div class="mini"><div style="width:${mem}%"></div></div>
+    <div class="metrica"><span>Temperatura</span><b>${g.temp} °C</b></div>`;
+}
+
+function pintarHistorial(h) {
+  if (!h.length) return;
+  $("historial").className = "";
+  $("historial").innerHTML = `<table><tr><th>Escaneo</th><th>Inicio</th><th>Duración</th><th>Render</th><th>Estado</th></tr>${
+    h.map((x) => `<tr><td>${esc(x.nombre)}</td><td>${new Date(x.inicio * 1000).toLocaleString("es")}</td>
+      <td>${x.minutos} min</td><td>${x.psnr ? x.psnr + " dB" : "—"}</td>
+      <td class="estado-${x.estado}" title="${esc(x.error)}">${x.estado === "listo" ? "Listo" : "Error"}</td></tr>`).join("")
+  }</table>`;
+}
+
+async function refrescar() {
+  try {
+    const d = await (await fetch("/estado")).json();
+    const s = $("servidor");
+    s.className = "chip " + (d.servidor.ok ? "ok" : d.servidor.ok === false ? "mal" : "");
+    s.textContent = d.servidor.ok ? "Conectado al servidor" : d.servidor.ok === false ? "Sin conexión con el servidor" : "Conectando…";
+    s.title = d.servidor.url;
+    pintarTrabajo(d);
+    pintarGPU(d.gpu);
+    pintarHistorial(d.historial);
+    const reg = $("registro");
+    reg.textContent = d.registro.join("\n");
+    if (seguirRegistro) reg.scrollTop = reg.scrollHeight;
+    const clave = d.trabajo && d.trabajo.imagen ? d.trabajo.carpeta : null;
+    $("caja-comparacion").hidden = !clave;
+    if (clave && clave !== imagenVista) { $("comparacion").src = "/comparacion.jpg?" + Date.now(); imagenVista = clave; }
+  } catch {
+    $("servidor").className = "chip mal";
+    $("servidor").textContent = "El trabajador no responde";
+  }
+}
+refrescar();
+setInterval(refrescar, 2000);
+</script>
+</body>
+</html>

@@ -17,7 +17,9 @@ Resultado en <escaneo>/splat2d/: malla_2dgs_plana.ply (completa), malla_movil.pl
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -61,8 +63,43 @@ def malla_movil(entrada: Path, salida: Path, triangulos: int, registro):
     registro(f"Malla para el iPhone: {len(f2)} triángulos ({salida.stat().st_size / 1e6:.0f} MB)")
 
 
+def huella(origen: Path, max_fotogramas: int) -> str:
+    """Identifica las entradas de la fotogrametría: mismas fotos y poses (camaras.json) y mismo tope de fotogramas."""
+    h = hashlib.sha256(str(max_fotogramas).encode())
+    for sub in ("fotos_clave", "fotogramas"):
+        ruta = origen / sub / "camaras.json"
+        if ruta.exists():
+            h.update(sub.encode())
+            h.update(ruta.read_bytes())
+    return h.hexdigest()
+
+
+def reutilizar_fotogrametria(origen: Path, trabajo: Path, max_fotogramas: int, registro) -> bool:
+    """Al reenviar un escaneo ya procesado, el trabajo tiene otro nombre pero las mismas fotos: se copia la
+    fotogrametría hecha (imágenes, puntos y ajuste de haces; la nube densa solo si existe) en vez de repetirla."""
+    if trabajo.exists():
+        return False
+    buscada = huella(origen, max_fotogramas)
+    for previo in sorted((HERRAMIENTAS / "trabajos").glob("*/huella.txt"), key=lambda p: -p.stat().st_mtime):
+        anterior = previo.parent
+        if previo.read_text().strip() != buscada or not (anterior / "sparse" / "ajustada" / "points3D.txt").exists():
+            continue
+        trabajo.mkdir(parents=True)
+        for nombre in ("camaras.json", "huella.txt", "database.db"):
+            if (anterior / nombre).exists():
+                shutil.copy2(anterior / nombre, trabajo / nombre)
+        shutil.copytree(anterior / "imagenes", trabajo / "imagenes")
+        shutil.copytree(anterior / "sparse", trabajo / "sparse")
+        if (anterior / "dense" / "fused.ply").exists():
+            (trabajo / "dense").mkdir()
+            shutil.copy2(anterior / "dense" / "fused.ply", trabajo / "dense" / "fused.ply")
+        registro(f"1/6 Fotogrametría reutilizada de {anterior.name} (mismas fotos y poses)")
+        return True
+    return False
+
+
 def procesar(carpeta: Path, max_fotogramas: int = 160, pasos: int = 20_000, triangulos_movil: int = 1_500_000,
-             registro=print) -> Path:
+             registro=print, densa: bool = False) -> Path:
     origen = carpeta.resolve()
     trabajo = HERRAMIENTAS / "trabajos" / origen.name
     destino = origen / "splat2d"
@@ -74,12 +111,14 @@ def procesar(carpeta: Path, max_fotogramas: int = 160, pasos: int = 20_000, tria
         registro("0/6 Fusión LiDAR de la grabación…")
         ejecutar([sys.executable, str(AQUI / "fusionar_lidar.py"), str(origen)], registro)
 
+    reutilizar_fotogrametria(origen, trabajo, max_fotogramas, registro)
     if not (trabajo / "camaras.json").exists():
         registro("1/6 Preparando imágenes…")
         registro(f"    {fotogrametria.preparar(origen, trabajo, max_fotogramas)} imágenes con su pose de ARKit")
-    if not (trabajo / "dense" / "fused.ply").exists():
-        registro("1/6 Fotogrametría COLMAP (la parte más larga: profundidad densa en la GPU)…")
-        registro(f"    {fotogrametria.colmap(trabajo, COLMAP, registro)}")
+        (trabajo / "huella.txt").write_text(huella(origen, max_fotogramas))
+    if not (trabajo / "sparse" / "ajustada" / "points3D.txt").exists():
+        registro("1/6 Fotogrametría COLMAP (puntos y ajuste de haces con las poses de ARKit)…")
+        registro(f"    {fotogrametria.colmap(trabajo, COLMAP, registro, densa=densa)}")
     else:
         registro("1/6 Fotogrametría: ya hecha")
 
@@ -130,8 +169,9 @@ def main():
     p.add_argument("--max-fotogramas", type=int, default=160)
     p.add_argument("--pasos", type=int, default=20_000)
     p.add_argument("--triangulos-movil", type=int, default=1_500_000)
+    p.add_argument("--densa", action="store_true", help="calcular también la nube densa de COLMAP (20-50 min más)")
     a = p.parse_args()
-    procesar(Path(a.carpeta), a.max_fotogramas, a.pasos, a.triangulos_movil)
+    procesar(Path(a.carpeta), a.max_fotogramas, a.pasos, a.triangulos_movil, densa=a.densa)
 
 
 if __name__ == "__main__":

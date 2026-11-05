@@ -84,11 +84,12 @@ def main():
     escena = float(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max())
 
     # Inicio: nube densa de COLMAP (detalle donde hay textura) + malla LiDAR (paredes lisas), como splat2d_local.
-    densa_xyz, densa_rgb = leer_ply(trabajo / "dense" / "fused.ply")
+    from escaner_ia.fotogrametria import nube_inicial
+    densa_xyz, densa_rgb = nube_inicial(trabajo)
     densa_xyz = densa_xyz @ T[:3, :3].T.astype(np.float32) + T[:3, 3].astype(np.float32)
     rng = np.random.default_rng(0)
     i1 = rng.choice(len(densa_xyz), min(500_000, len(densa_xyz)), replace=False)
-    i2 = rng.choice(len(lidar_xyz), min(300_000, len(lidar_xyz)), replace=False)
+    i2 = rng.choice(len(lidar_xyz), min(800_000 - len(i1), len(lidar_xyz)), replace=False)
     xyz = torch.from_numpy(np.concatenate([densa_xyz[i1], lidar_xyz[i2]])).to(dev)
     rgb = torch.from_numpy(np.concatenate([densa_rgb[i1], lidar_rgb[i2]])).to(dev)
     d = torch.empty(len(xyz), device=dev)

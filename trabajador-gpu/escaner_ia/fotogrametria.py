@@ -100,7 +100,29 @@ def preparar(origen: Path, destino: Path, max_fotogramas: int = 160) -> int:
     return len(camaras)
 
 
-def colmap(raiz: Path, colmap_cmd: list[str], registro=print, max_imagen: int = 2000) -> dict:
+def nube_inicial(raiz: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Puntos de COLMAP en el mundo de ARKit con su color (0-1): la nube densa si se calculó; si no, los puntos del
+    ajuste de haces (miles en vez de millones, pero en los mismos sitios con textura)."""
+    densa = raiz / "dense" / "fused.ply"
+    if densa.exists():
+        from splat2d_local import leer_ply
+        return leer_ply(densa)
+    xyz, rgb = [], []
+    for linea in (raiz / "sparse" / "ajustada" / "points3D.txt").read_text().splitlines():
+        if not linea or linea.startswith("#"):
+            continue
+        p = linea.split()
+        xyz.append([float(p[1]), float(p[2]), float(p[3])])
+        rgb.append([int(p[4]), int(p[5]), int(p[6])])
+    return np.asarray(xyz, np.float32), np.asarray(rgb, np.float32) / 255
+
+
+def colmap(raiz: Path, colmap_cmd: list[str], registro=print, max_imagen: int = 2000, densa: bool = False) -> dict:
+    """Puntos, ajuste de haces con las poses de ARKit y, solo con `densa`, la nube densa (patch_match_stereo).
+
+    La nube densa era lo más lento de todo el procesado (20-50 min) y solo servía para alinear y arrancar los
+    splats. Con la malla LiDAR de fusionar_lidar.py (a < 1 cm de cada foto) ya no hace falta: la alineación y el
+    arranque usan los puntos del ajuste de haces y la malla LiDAR."""
     imagenes, sparse, dense = raiz / "imagenes", raiz / "sparse", raiz / "dense"
     camaras = json.loads((raiz / "camaras.json").read_text())
     db = raiz / "database.db"
@@ -149,13 +171,15 @@ def colmap(raiz: Path, colmap_cmd: list[str], registro=print, max_imagen: int = 
                                                   [escala, *_cuaternion(sim[:3, :3] / escala), *sim[:3, 3]]) + "\n")
     c("model_transformer", "--input_path", ba, "--output_path", ba, "--transform_path", sparse / "a_arkit.txt")
     c("model_converter", "--input_path", ba, "--output_path", ba, "--output_type", "TXT")
+    puntos = sum(1 for linea in (ba / "points3D.txt").read_text().splitlines() if linea and not linea.startswith("#"))
+    if not densa:
+        return {"imagenes": len(filas), "puntos_dispersos": puntos}
     c("image_undistorter", "--image_path", imagenes, "--input_path", ba, "--output_path", dense,
       "--output_type", "COLMAP", "--max_image_size", str(max_imagen))
     c("patch_match_stereo", "--workspace_path", dense, "--PatchMatchStereo.geom_consistency", "true",
       "--PatchMatchStereo.max_image_size", "1600")
     c("stereo_fusion", "--workspace_path", dense, "--output_path", dense / "fused.ply", "--StereoFusion.min_num_pixels", "3")
 
-    puntos = sum(1 for linea in (ba / "points3D.txt").read_text().splitlines() if linea and not linea.startswith("#"))
     return {"imagenes": len(filas), "puntos_dispersos": puntos,
             "nube_densa_MB": round((dense / "fused.ply").stat().st_size / 1e6, 1)}
 

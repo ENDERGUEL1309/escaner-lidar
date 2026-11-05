@@ -46,7 +46,7 @@ def main():
         registro(f"Preparando imágenes en {trabajo}…")
         registro(f"{fotogrametria.preparar(origen, trabajo, a.max_fotogramas)} imágenes con su pose de ARKit")
     if not a.solo_openmvs:
-        registro(f"COLMAP: {fotogrametria.colmap(trabajo, ['cmd', '/c', a.colmap], registro)}")
+        registro(f"COLMAP: {fotogrametria.colmap(trabajo, ['cmd', '/c', a.colmap], registro, densa=True)}")
     registro(f"OpenMVS: {fotogrametria.openmvs(trabajo, Path(a.openmvs), registro, ['cmd', '/c', a.colmap])}")
 
     for f in (trabajo / "mvs").glob("texturizada*"):

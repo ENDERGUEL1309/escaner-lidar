@@ -133,11 +133,11 @@ def alinear_con_lidar(origen: Path, trabajo: Path, ruta: Path, registro=print) -
     centímetros y grados de diferencia entre las poses de ARKit y la fusión de la app)."""
     from scipy.spatial import cKDTree
 
-    from escaner_ia.fotogrametria import similitud_arkit
+    from escaner_ia.fotogrametria import nube_inicial, similitud_arkit
 
     camaras = json.loads((trabajo / "camaras.json").read_text())
     T = similitud_arkit(trabajo / "sparse" / "ajustada" / "images.txt", camaras)
-    densa, _ = leer_ply(trabajo / "dense" / "fused.ply")
+    densa, _ = nube_inicial(trabajo)
     lidar, _ = leer_ply(origen / "malla_color.ply")
     rng = np.random.default_rng(0)
     fuente = densa[rng.choice(len(densa), min(60_000, len(densa)), replace=False)].astype(np.float64)
@@ -270,12 +270,14 @@ def main():
     escena = float(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max())
 
     if not a.solo_malla:
-        # Inicialización: nube densa de COLMAP (detalle donde hay textura) + malla LiDAR (paredes lisas).
-        densa_xyz, densa_rgb = leer_ply(trabajo / "dense" / "fused.ply")
+        # Inicialización: puntos de COLMAP (detalle donde hay textura) + malla LiDAR (paredes lisas). Sin la nube
+        # densa, los puntos de COLMAP son pocos y la malla LiDAR pone el resto.
+        from escaner_ia.fotogrametria import nube_inicial
+        densa_xyz, densa_rgb = nube_inicial(trabajo)
         densa_xyz = densa_xyz @ T[:3, :3].T.astype(np.float32) + T[:3, 3].astype(np.float32)
         rng = np.random.default_rng(0)
         i1 = rng.choice(len(densa_xyz), min(400_000, len(densa_xyz)), replace=False)
-        i2 = rng.choice(len(lidar_xyz), min(200_000, len(lidar_xyz)), replace=False)
+        i2 = rng.choice(len(lidar_xyz), min(600_000 - len(i1), len(lidar_xyz)), replace=False)
         xyz = torch.from_numpy(np.concatenate([densa_xyz[i1], lidar_xyz[i2]])).to(dev)
         rgb = torch.from_numpy(np.concatenate([densa_rgb[i1], lidar_rgb[i2]])).to(dev)
         # Escala inicial: distancia media a los 3 vecinos más próximos (por bloques para no agotar memoria).
