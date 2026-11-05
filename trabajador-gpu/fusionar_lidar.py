@@ -91,7 +91,9 @@ def fusionar(carpeta: Path, voxel: float = 0.01, max_prof: float = 4.0, salida: 
     color = torch.zeros(n, 3, device=dev)
     # Centros de los vÃ³xeles por bloques de planos z, para no tener todos a la vez en memoria.
     gx, gy = torch.meshgrid(torch.arange(dims[0], device=dev), torch.arange(dims[1], device=dev), indexing="ij")
-    plano = torch.stack([gx.flatten(), gy.flatten()], 1).float()
+    # Índices enteros: en float32 un índice lineal por encima de 2^24 (16,7 millones de vóxeles) se redondea y el
+    # LiDAR de muchas fotos acababa escrito en vóxeles equivocados, a metros de su sitio.
+    plano = torch.stack([gx.flatten(), gy.flatten()], 1).long()
     lo_t = torch.tensor(lo, device=dev, dtype=torch.float32)
     t0 = time.time()
 
@@ -103,9 +105,9 @@ def fusionar(carpeta: Path, voxel: float = 0.01, max_prof: float = 4.0, salida: 
         h, w = mapa.shape
         bloque = max(1, 4_000_000 // len(plano))
         for z0 in range(0, dims[2], bloque):
-            zs = torch.arange(z0, min(dims[2], z0 + bloque), device=dev).float()
-            idx = torch.cat([torch.cat([plano, torch.full((len(plano), 1), float(z), device=dev)], 1) for z in zs])
-            mundo = lo_t + (idx + 0.5) * voxel
+            zs = range(z0, min(int(dims[2]), z0 + bloque))
+            idx = torch.cat([torch.cat([plano, torch.full((len(plano), 1), z, device=dev, dtype=torch.long)], 1) for z in zs])
+            mundo = lo_t + (idx.float() + 0.5) * voxel
             cam = mundo @ R.T + t
             z = cam[:, 2]
             delante = z > 0.1
@@ -118,7 +120,7 @@ def fusionar(carpeta: Path, voxel: float = 0.01, max_prof: float = 4.0, salida: 
             util = dentro & (d > 0) & (sdf > -trunc)
             if not util.any():
                 continue
-            lineal = (idx[:, 0] * dims[1] * dims[2] + idx[:, 1] * dims[2] + idx[:, 2]).long()[util]
+            lineal = (idx[:, 0] * int(dims[1] * dims[2]) + idx[:, 1] * int(dims[2]) + idx[:, 2])[util]
             valor = (sdf[util] / trunc).clamp(max=1)
             # Las lecturas lejanas y de canto pesan menos: el error del LiDAR crece con la distancia.
             p = 1 / d[util].clamp(min=0.5)
