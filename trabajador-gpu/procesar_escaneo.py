@@ -69,6 +69,11 @@ def procesar(carpeta: Path, max_fotogramas: int = 160, pasos: int = 20_000, tria
     destino.mkdir(exist_ok=True)
     t0 = time.time()
 
+    # Habitación grabada en la app: trae fotogramas con LiDAR pero no malla; se funde aquí.
+    if not (origen / "malla_color.ply").exists() and (origen / "fotogramas" / "camaras.json").exists():
+        registro("0/6 Fusión LiDAR de la grabación…")
+        ejecutar([sys.executable, str(AQUI / "fusionar_lidar.py"), str(origen)], registro)
+
     if not (trabajo / "camaras.json").exists():
         registro("1/6 Preparando imágenes…")
         registro(f"    {fotogrametria.preparar(origen, trabajo, max_fotogramas)} imágenes con su pose de ARKit")

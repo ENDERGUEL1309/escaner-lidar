@@ -70,6 +70,7 @@ class Progreso:
         (r"Versión ligera", 0.92, "Preparando la versión para el iPhone"),
         (r"Modelado verificado", 0.94, "Modelando los muebles y comprobándolos con las fotos"),
         (r"Render fotorrealista", 0.95, "Creando el render fotorrealista"),
+        (r"Fusión LiDAR", 0.04, "Fundiendo el LiDAR de la grabación"),
     ]
 
     # La profundidad densa de COLMAP no escribe nada durante ~45 min: su avance se estima por el tiempo.
@@ -125,7 +126,15 @@ def atender(trabajo: dict):
     print(f"\n=== Trabajo {trabajo['id']} ({nombre}) → {carpeta}", flush=True)
     try:
         avisador.etapa("Descargando en tu PC", 0.0)
-        descargar(trabajo["entradas"], carpeta, lambda f: None)
+        # La descarga es el 0–3 % de la barra; se avisa como mucho cada 5 s para no saturar el servidor.
+        ultimo_aviso = [0.0]
+
+        def avance_descarga(fraccion: float):
+            if time.time() - ultimo_aviso[0] >= 5 or fraccion >= 1:
+                ultimo_aviso[0] = time.time()
+                avisador.etapa(f"Descargando en tu PC ({round(fraccion * 100)} %)", 0.03 * fraccion)
+
+        descargar(trabajo["entradas"], carpeta, avance_descarga)
         pasos = 20_000
         progreso = Progreso(avisador, pasos)
         try:

@@ -502,7 +502,7 @@ final class SceneScanner: NSObject, ARSessionDelegate {
 
     /// Descarta los "píxeles volantes": en los bordes de los objetos el LiDAR mezcla primer plano y fondo
     /// y devuelve distancias intermedias que no existen. Se detectan por el salto con sus vecinos.
-    private static func removeFlyingPixels(_ depth: [Float], width w: Int, height h: Int) -> [Float] {
+    static func removeFlyingPixels(_ depth: [Float], width w: Int, height h: Int) -> [Float] {
         var out = [Float](repeating: 0, count: depth.count)
         guard w > 2, h > 2 else { return out }
         for y in 1..<(h - 1) {

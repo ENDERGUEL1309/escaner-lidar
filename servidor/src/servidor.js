@@ -140,8 +140,9 @@ function validarManifiesto(m) {
     return { ruta, bytes: a.bytes, sha256: a.sha256 ?? null };
   });
   if (total > MAX_ESCANEO) throw new ErrorHttp(400, `El escaneo supera ${MAX_ESCANEO / 1024 / 1024} MB`);
-  if (!vistos.has('malla_color.ply') && !vistos.has('escena.json')) {
-    throw new ErrorHttp(400, 'Hace falta al menos `malla_color.ply` o `escena.json`');
+  // Una habitación grabada trae solo fotogramas (foto + LiDAR + pose): el PC funde la malla LiDAR él mismo.
+  if (!vistos.has('malla_color.ply') && !vistos.has('escena.json') && !vistos.has('fotogramas/camaras.json')) {
+    throw new ErrorHttp(400, 'Hace falta al menos `malla_color.ply`, `escena.json` o `fotogramas/camaras.json`');
   }
 
   const o = m.opciones ?? {};

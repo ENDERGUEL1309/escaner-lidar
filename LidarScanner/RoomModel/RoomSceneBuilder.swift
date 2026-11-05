@@ -50,8 +50,40 @@ final class RoomSceneBuilder {
         value.formatted(.number.precision(.fractionLength(2))) + " m"
     }
 
+    /// Cono naranja en el punto desde el que conviene volver a grabar, apuntando a lo que falla.
+    static func viewpoint(eye: SIMD3<Float>, target: SIMD3<Float>, text: String) -> [SCNNode] {
+        let cone = SCNCone(topRadius: 0, bottomRadius: 0.09, height: 0.22)
+        cone.firstMaterial?.diffuse.contents = UIColor.systemOrange
+        cone.firstMaterial?.lightingModel = .constant
+        let tip = SCNNode(geometry: cone)
+        tip.eulerAngles.x = -.pi / 2                          // la punta del cono hacia −z, como mira una cámara
+        let node = SCNNode()
+        node.addChildNode(tip)
+        node.simdPosition = eye
+        node.simdLook(at: target)
+        let line = SCNGeometry(sources: [SCNGeometrySource(vertices: [SCNVector3(eye), SCNVector3(target)])],
+                               elements: [SCNGeometryElement(indices: [UInt32(0), 1], primitiveType: .line)])
+        line.firstMaterial?.diffuse.contents = UIColor.systemOrange
+        line.firstMaterial?.lightingModel = .constant
+        return [node, SCNNode(geometry: line), label(text, at: eye + SIMD3(0, 0.2, 0), size: 0.05)]
+    }
+
     func nodes(for room: RoomModel, selectedID: UUID?, labels: Bool) -> [SCNNode] {
         var result: [SCNNode] = []
+        if labels {
+            // Solo lo que falla de verdad (rojo), o lo seleccionado, para no llenar la vista de conos.
+            for (i, wall) in room.walls.enumerated() {
+                if let v = wall.validation, v.state == .red, let eye = v.suggestedEye, let target = v.suggestedTarget {
+                    result += Self.viewpoint(eye: eye, target: target, text: "Graba la pared \(i + 1) desde aquí")
+                }
+            }
+            for f in room.furniture where f.detail == nil {
+                if let v = f.validation, v.state == .red || f.id == selectedID,
+                   let eye = v.suggestedEye, let target = v.suggestedTarget {
+                    result += Self.viewpoint(eye: eye, target: target, text: "\(f.name): grábalo desde aquí")
+                }
+            }
+        }
 
         for (i, wall) in room.walls.enumerated() {
             let box = SCNBox(width: CGFloat(wall.width), height: CGFloat(wall.height), length: 0.04, chamferRadius: 0)

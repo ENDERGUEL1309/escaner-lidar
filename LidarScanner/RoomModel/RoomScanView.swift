@@ -162,7 +162,7 @@ private final class RoomKeyframeSampler {
 
 /// Controlador de RoomPlan: su propia sesión de ARKit, su guía en pantalla y su resultado procesado.
 final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate {
-    var onFinished: ((CapturedRoom, [Keyframe], [ValidationFrame]) -> Void)?
+    var onFinished: ((CapturedRoom, [Keyframe], [ValidationFrame], URL?) -> Void)?
     var onFailed: ((String) -> Void)?
     var onQuality: ((LiveQuality) -> Void)?
 
@@ -174,6 +174,13 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
     private var isStopped = false
     private let sampler = RoomKeyframeSampler()
     private let validator = CaptureValidator()
+    /// Carpeta de la habitación; se borra si la captura no llega a terminar.
+    private let folder = try? ScanStorage.newScanFolder(prefix: "Habitacion")
+    private var delivered = false
+
+    deinit {
+        if !delivered, let folder { try? FileManager.default.removeItem(at: folder) }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -188,6 +195,7 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
         validator.onQuality = { [weak self] quality in self?.onQuality?(quality) }
         validator.start()
+        if let folder { validator.startRecording(in: folder) }
         timer = Timer.scheduledTimer(timeInterval: 0.3, target: self, selector: #selector(sampleFrame), userInfo: nil, repeats: true)
     }
 
@@ -221,14 +229,16 @@ final class RoomCaptureViewController: UIViewController, RoomCaptureViewDelegate
         if let error {
             onFailed?(error.localizedDescription)
         } else {
-            onFinished?(processedResult, sampler.collected(), validator.collected())
+            validator.finishRecording()
+            delivered = true
+            onFinished?(processedResult, sampler.collected(), validator.collected(), folder)
         }
     }
 }
 
 private struct RoomCaptureContainer: UIViewControllerRepresentable {
     @Binding var stopRequested: Bool
-    let onFinished: (CapturedRoom, [Keyframe], [ValidationFrame]) -> Void
+    let onFinished: (CapturedRoom, [Keyframe], [ValidationFrame], URL?) -> Void
     let onFailed: (String) -> Void
     let onQuality: (LiveQuality) -> Void
 
@@ -304,14 +314,15 @@ struct RoomScanView: View {
                 ContentUnavailableView("No se pudo capturar la habitación", systemImage: "exclamationmark.triangle",
                                        description: Text(failure))
             } else {
-                RoomCaptureContainer(stopRequested: $stopRequested) { room, keyframes, frames in
+                RoomCaptureContainer(stopRequested: $stopRequested) { room, keyframes, frames, folder in
                     isValidating = true
                     let model = RoomModelBuilder.build(from: room)
                     Task {
                         let validated = await Task.detached(priority: .userInitiated) {
                             CaptureValidator.validate(room: model, frames: frames)
                         }.value
-                        editor = RoomEditorModel(room: validated, keyframes: keyframes, validationFrames: frames)
+                        editor = RoomEditorModel(room: validated, keyframes: keyframes, validationFrames: frames,
+                                                 folder: folder)
                         isValidating = false
                     }
                 } onFailed: { message in

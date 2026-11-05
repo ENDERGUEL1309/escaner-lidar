@@ -20,6 +20,7 @@ final class RoomEditorModel {
     var detailTarget: ParametricFurniture?
     var isFitting = false
     var detailMessage: String?
+    var showPC = false
     private(set) var revision = 0
 
     @ObservationIgnored let keyframes: [Keyframe]
@@ -58,7 +59,7 @@ final class RoomEditorModel {
         guard !validationFrames.isEmpty, let i = room.furniture.firstIndex(where: { $0.id == id }) else { return }
         let s = CaptureValidator.samples(of: room.furniture[i])
         room.furniture[i].validation = CaptureValidator.validate(points: s.points, normals: s.normals, isWall: false,
-                                                                 frames: validationFrames)
+                                                                 frames: validationFrames, walls: room.walls)
     }
 
     private func changed() {
@@ -465,6 +466,11 @@ struct RoomEditorView: View {
                     Button { model.export() } label: {
                         Label("Exportar", systemImage: "square.and.arrow.up")
                     }
+                    if PCReconstruction.isAvailable(for: model.folder) {
+                        Button { model.showPC = true } label: {
+                            Label("PC", systemImage: "desktopcomputer")
+                        }
+                    }
                 }
                 .buttonStyle(.bordered)
                 if !model.exportedFiles.isEmpty {
@@ -489,6 +495,20 @@ struct RoomEditorView: View {
                 ProgressView("Colocando el objeto…")
                     .padding()
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .sheet(isPresented: $model.showPC) {
+            NavigationStack {
+                List {
+                    PCReconstructionSection(folder: model.folder)
+                    Section {
+                        Text("Tu PC funde la grabación (solo las fotos que pasaron los filtros) en una malla LiDAR, la refina con fotogrametría y crea el render fotorrealista de toda la habitación.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .navigationTitle("Alta calidad en el PC")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar") { model.showPC = false } } }
             }
         }
         .fullScreenCover(item: $model.detailTarget) { f in

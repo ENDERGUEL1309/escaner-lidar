@@ -46,11 +46,12 @@ final class PCReconstruction {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// Hacen falta las fotos con su pose (fotos clave y fotogramas) además de la malla LiDAR.
+    /// Escaneo de entorno: malla LiDAR y fotos con su pose. Habitación grabada: sus fotogramas con LiDAR y pose
+    /// bastan (el PC funde la malla con fusionar_lidar.py).
     static func isAvailable(for folder: URL) -> Bool {
         let fm = FileManager.default
-        return fm.fileExists(atPath: folder.appendingPathComponent("malla_color.ply").path)
-            && fm.fileExists(atPath: folder.appendingPathComponent("fotos_clave/camaras.json").path)
+        let exists = { (path: String) in fm.fileExists(atPath: folder.appendingPathComponent(path).path) }
+        return (exists("malla_color.ply") && exists("fotos_clave/camaras.json")) || exists("fotogramas/camaras.json")
     }
 
     /// Modelos y plano devueltos por el refinado local, para compartirlos.

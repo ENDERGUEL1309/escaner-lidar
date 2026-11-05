@@ -1,4 +1,5 @@
 import ARKit
+import CoreImage
 import CoreMotion
 import Foundation
 import simd
@@ -34,6 +35,9 @@ struct ValidationCheck: Codable, Identifiable {
 /// Validaciones de un elemento. Cada una sale de una fuente distinta; cuantas más se cumplan, más fiable es.
 struct ElementValidation: Codable {
     var checks: [ValidationCheck] = []
+    /// Desde dónde volver a grabarlo (posición del iPhone y punto al que mirar), si alguna validación falla.
+    var suggestedEye: SIMD3<Float>?
+    var suggestedTarget: SIMD3<Float>?
 
     var passed: Int { checks.filter(\.passed).count }
     var state: VerificationState {
@@ -76,6 +80,98 @@ final class CaptureValidator {
     private var lastAttitude: simd_quatf?                       // solo desde `queue`
     private var isBusy = false                                  // solo desde main
     private lazy var colorDepth = ColorDepth()                  // solo desde `queue`
+
+    // Grabación: fotogramas buenos (foto + LiDAR + pose) y bitácora de sensores, en el formato de los escaneos de
+    // entorno (fotogramas/camaras.json), para poder reprocesar la habitación en el PC.
+    private var recordingFolder: URL?                           // solo desde `queue`
+    private var records: [CloudExport.Photo] = []               // solo desde `queue`
+    private var lastSavedPose: simd_float4x4?                   // solo desde `queue`
+    private var lastSavedTime: TimeInterval = 0                 // solo desde `queue`
+    private var sensorLog: [SensorSample] = []                  // solo desde `queue`
+    private let ciContext = CIContext()
+
+    struct SensorSample: Codable {
+        var t: Double
+        /// Pose de ARKit (posición y cuaternión x, y, z, w).
+        var posicion: [Float]
+        var orientacion: [Float]
+        /// Giroscopio (rad/s), gravedad (g), aceleración del usuario (g) y actitud del sensor de movimiento.
+        var giro: [Double]
+        var gravedad: [Double]
+        var aceleracion: [Double]
+        var actitud: [Double]
+        var nitida: Bool
+        var luz: Bool
+        var estable: Bool
+        var seguimiento: Bool
+        var giroscopioCoincide: Bool
+        var lidar: Float
+        var distancia: Float
+        var reflejos: Float
+        var color: Float?
+        /// Fotograma guardado en este instante, si lo hubo.
+        var fotograma: String?
+    }
+
+    func startRecording(in folder: URL) {
+        let directory = folder.appendingPathComponent("fotogramas", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        queue.async { self.recordingFolder = directory }
+    }
+
+    /// Escribe camaras.json y sensores.json. Devuelve cuántos fotogramas se guardaron.
+    @discardableResult
+    func finishRecording() -> Int {
+        queue.sync {
+            guard let directory = recordingFolder else { return 0 }
+            recordingFolder = nil
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try? encoder.encode(CloudExport.Cameras(fotos: records))
+                .write(to: directory.appendingPathComponent("camaras.json"), options: .atomic)
+            try? encoder.encode(sensorLog)
+                .write(to: directory.deletingLastPathComponent().appendingPathComponent("sensores.json"), options: .atomic)
+            return records.count
+        }
+    }
+
+    /// Guarda la foto (1280 px) y su LiDAR a resolución completa con la confianza, como SceneScanner.
+    private func saveFrame(buffer: CVPixelBuffer, camera: ARCamera, timestamp: TimeInterval,
+                           depth: (depth: [Float], confidence: [UInt8], width: Int, height: Int)?, in directory: URL) -> String? {
+        let index = records.count
+        let name = String(format: "%04d.jpg", index)
+        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+        let scale = min(1, 1280 / Float(width))
+        let image = CIImage(cvPixelBuffer: buffer)
+            .transformed(by: CGAffineTransform(scaleX: CGFloat(scale), y: CGFloat(scale)))
+        let quality = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
+        guard (try? ciContext.writeJPEGRepresentation(of: image, to: directory.appendingPathComponent(name),
+                                                      colorSpace: CGColorSpaceCreateDeviceRGB(),
+                                                      options: [quality: 0.85])) != nil else { return nil }
+        let resolution = camera.imageResolution
+        let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
+            .scaled(sx: Float(width) / Float(resolution.width) * scale, sy: Float(height) / Float(resolution.height) * scale)
+        var depthInfo: CloudExport.DepthInfo?
+        if let depth {
+            let clean = SceneScanner.removeFlyingPixels(depth.depth, width: depth.width, height: depth.height)
+            let depthName = String(format: "%04d.prof", index)
+            let data = CloudExport.depthData(clean, width: depth.width, height: depth.height, confidence: depth.confidence)
+            if (try? data.write(to: directory.appendingPathComponent(depthName), options: .atomic)) != nil {
+                let d = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
+                    .scaled(sx: Float(depth.width) / Float(resolution.width), sy: Float(depth.height) / Float(resolution.height))
+                depthInfo = CloudExport.DepthInfo(archivo: depthName, ancho: depth.width, alto: depth.height,
+                                                  fx: d.fx, fy: d.fy, cx: d.cx, cy: d.cy)
+            }
+        }
+        let m = model.cameraToWorld
+        records.append(CloudExport.Photo(
+            archivo: name,
+            ancho: Int((Float(width) * scale).rounded()), alto: Int((Float(height) * scale).rounded()),
+            fx: model.fx, fy: model.fy, cx: model.cx, cy: model.cy,
+            cameraToWorld: [m.columns.0, m.columns.1, m.columns.2, m.columns.3].flatMap { [$0.x, $0.y, $0.z, $0.w] },
+            marcaTiempo: timestamp, profundidad: depthInfo))
+        return name
+    }
     private static let maxFrames = 1500
 
     var onQuality: ((LiveQuality) -> Void)?
@@ -98,6 +194,7 @@ final class CaptureValidator {
         let camera = frame.camera
         let depth = (frame.smoothedSceneDepth ?? frame.sceneDepth).map { SceneScanner.copyDepth($0) }
         let device = motion.deviceMotion
+        let timestamp = frame.timestamp
         let rate = device.map { Float(simd_length(SIMD3($0.rotationRate.x, $0.rotationRate.y, $0.rotationRate.z))) } ?? 0
         let attitude = device.map { q in
             simd_quatf(ix: Float(q.attitude.quaternion.x), iy: Float(q.attitude.quaternion.y),
@@ -108,7 +205,7 @@ final class CaptureValidator {
         queue.async { [weak self] in
             guard let self else { return }
             let quality = self.record(buffer: buffer, camera: camera, depth: depth, rate: rate,
-                                      attitude: attitude, tracking: tracking)
+                                      attitude: attitude, tracking: tracking, timestamp: timestamp, device: device)
             DispatchQueue.main.async {
                 self.isBusy = false
                 self.onQuality?(quality)
@@ -148,7 +245,8 @@ final class CaptureValidator {
 
     private func record(buffer: CVPixelBuffer, camera: ARCamera,
                         depth: (depth: [Float], confidence: [UInt8], width: Int, height: Int)?,
-                        rate: Float, attitude: simd_quatf?, tracking: Bool) -> LiveQuality {
+                        rate: Float, attitude: simd_quatf?, tracking: Bool,
+                        timestamp: TimeInterval, device: CMDeviceMotion?) -> LiveQuality {
         var q = LiveQuality()
         q.tracking = tracking
 
@@ -215,6 +313,36 @@ final class CaptureValidator {
             : !q.imuAgrees ? "El seguimiento se desvía del giroscopio: vuelve despacio a una zona ya grabada"
             : nil
 
+        // Grabación: solo fotos que pasan los filtros, y solo si el iPhone se movió (≥ 8 cm o ≥ 6°) o pasó 1 s.
+        var savedName: String?
+        // Tope de 900 fotogramas (~350 MB): más no mejora la reconstrucción y llena el iPhone.
+        if let directory = recordingFolder, records.count < 900, q.sharp, q.light, q.steady, q.tracking, q.glare <= 0.08 {
+            let moved = lastSavedPose.map { last in
+                simd_distance(last.columns.3, camera.transform.columns.3) >= 0.08
+                    || Self.angle(simd_quatf(last) * simd_quatf(camera.transform).inverse) >= 6 * .pi / 180
+            } ?? true
+            if moved || timestamp - lastSavedTime >= 1, timestamp - lastSavedTime >= 0.25 {
+                savedName = saveFrame(buffer: buffer, camera: camera, timestamp: timestamp, depth: depth, in: directory)
+                if savedName != nil {
+                    lastSavedPose = camera.transform
+                    lastSavedTime = timestamp
+                }
+            }
+        }
+        if recordingFolder != nil {
+            let t = camera.transform.columns.3
+            let o = simd_quatf(camera.transform).vector
+            sensorLog.append(SensorSample(
+                t: timestamp, posicion: [t.x, t.y, t.z], orientacion: [o.x, o.y, o.z, o.w],
+                giro: device.map { [$0.rotationRate.x, $0.rotationRate.y, $0.rotationRate.z] } ?? [],
+                gravedad: device.map { [$0.gravity.x, $0.gravity.y, $0.gravity.z] } ?? [],
+                aceleracion: device.map { [$0.userAcceleration.x, $0.userAcceleration.y, $0.userAcceleration.z] } ?? [],
+                actitud: device.map { [$0.attitude.quaternion.x, $0.attitude.quaternion.y,
+                                       $0.attitude.quaternion.z, $0.attitude.quaternion.w] } ?? [],
+                nitida: q.sharp, luz: q.light, estable: q.steady, seguimiento: q.tracking, giroscopioCoincide: q.imuAgrees,
+                lidar: q.lidar, distancia: q.distance, reflejos: q.glare, color: q.colorAgreement, fotograma: savedName))
+        }
+
         if rw > 0, frames.count < Self.maxFrames {
             let resolution = camera.imageResolution
             let model = CameraModel(intrinsics: camera.intrinsics, cameraToWorld: camera.transform)
@@ -275,7 +403,7 @@ final class CaptureValidator {
     /// `isWall`: la pared se compara punto a punto con el LiDAR (≤ 2 cm); el mueble, como caja que debe contener
     /// lo medido (nada medido por fuera de sus caras).
     static func validate(points: [SIMD3<Float>], normals: [SIMD3<Float>], isWall: Bool,
-                         frames: [ValidationFrame]) -> ElementValidation {
+                         frames: [ValidationFrame], walls: [RoomWall] = []) -> ElementValidation {
         guard !points.isEmpty else { return ElementValidation() }
         let center = points.reduce(SIMD3<Float>(repeating: 0), +) / Float(points.count)
         var views = 0, goodViews = 0, closeViews = 0, frontalViews = 0, stableViews = 0
@@ -371,7 +499,45 @@ final class CaptureValidator {
         checks.append(.init(name: "Posición y giroscopio", passed: stableOK,
                             detail: stableOK ? "seguimiento estable y coherente con el giroscopio"
                                 : "el seguimiento se desvió: repasa la zona despacio"))
-        return ElementValidation(checks: checks)
+        var result = ElementValidation(checks: checks)
+        if result.passed < checks.count {
+            result.suggestedTarget = center
+            result.suggestedEye = suggestedEye(center: center, normals: normals, isWall: isWall, seen: sectors, walls: walls)
+        }
+        return result
+    }
+
+    /// Como en la exploración guiada por anomalías: se propone la vista que más falta. Pared: de frente a 1,8 m.
+    /// Mueble: el sector de 30° no visto más alejado de los vistos, a 1,5 m. Siempre a la altura de los ojos.
+    /// Las vistas que caerían detrás de una pared no se proponen (un mueble pegado a la pared no se ve por detrás).
+    static func suggestedEye(center: SIMD3<Float>, normals: [SIMD3<Float>], isWall: Bool, seen: Set<Int>,
+                             walls: [RoomWall]) -> SIMD3<Float> {
+        func place(_ direction: SIMD3<Float>, _ distance: Float) -> SIMD3<Float> {
+            var eye = center + direction * distance
+            eye.y = max(center.y + 0.3, 1.4)
+            return eye
+        }
+        func inside(_ eye: SIMD3<Float>) -> Bool {
+            !walls.contains { w in
+                let offset = eye - w.center
+                return abs(simd_dot(offset, w.tangent)) < w.width / 2 && simd_dot(offset, w.normal) < 0.3
+                    && simd_dot(center - w.center, w.normal) > 0          // el elemento está delante de esa pared
+            }
+        }
+        if isWall {
+            let n = normals.first ?? SIMD3(0, 0, 1)
+            return place(simd_normalize(SIMD3(n.x, 0, n.z) + SIMD3(1e-4, 0, 0)), 1.8)
+        }
+        func gap(_ s: Int) -> Int { seen.map { min(abs($0 - s), 12 - abs($0 - s)) }.min() ?? 6 }
+        let candidates = (0..<12).filter { !seen.contains($0) }.sorted { gap($0) > gap($1) } + Array(0..<12)
+        for distance in [1.5, 1.0] as [Float] {
+            for sector in candidates {
+                let azimuth = (Float(sector) + 0.5) * .pi / 6 - .pi
+                let eye = place(SIMD3(sin(azimuth), 0, cos(azimuth)), distance)
+                if inside(eye) { return eye }
+            }
+        }
+        return place(SIMD3(0, 0, 1), 1.0)
     }
 
     static func validate(room: RoomModel, frames: [ValidationFrame]) -> RoomModel {
@@ -382,7 +548,8 @@ final class CaptureValidator {
         }
         for i in room.furniture.indices {
             let s = samples(of: room.furniture[i])
-            room.furniture[i].validation = validate(points: s.points, normals: s.normals, isWall: false, frames: frames)
+            room.furniture[i].validation = validate(points: s.points, normals: s.normals, isWall: false, frames: frames,
+                                                        walls: room.walls)
         }
         return room
     }
