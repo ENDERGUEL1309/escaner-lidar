@@ -31,11 +31,31 @@ enum RoomModelBuilder {
             + room.objects.map { position($0.transform).y - $0.dimensions.y / 2 }
         model.floorY = bases.min() ?? 0
 
-        model.walls = room.walls.map { wall in
-            let center = position(wall.transform)
-            var normal = simd_normalize(SIMD3(wall.transform.columns.2.x, 0, wall.transform.columns.2.z))
+        func inwardNormal(_ surface: CapturedRoom.Surface) -> SIMD3<Float> {
+            let center = position(surface.transform)
+            var normal = simd_normalize(SIMD3(surface.transform.columns.2.x, 0, surface.transform.columns.2.z))
             if simd_dot(middle - center, normal) < 0 { normal = -normal }
-            return RoomWall(center: center, width: wall.dimensions.x, height: wall.dimensions.y, normal: normal)
+            return normal
+        }
+
+        model.walls = room.walls.map { wall in
+            RoomWall(center: position(wall.transform), width: wall.dimensions.x, height: wall.dimensions.y,
+                     normal: inwardNormal(wall))
+        }
+        let openings: [(OpeningKind, [CapturedRoom.Surface])] = [(.door, room.doors), (.window, room.windows),
+                                                                  (.opening, room.openings)]
+        model.openings = openings.flatMap { kind, surfaces in
+            surfaces.map { s in
+                RoomOpening(kind: kind, center: position(s.transform), width: s.dimensions.x, height: s.dimensions.y,
+                            normal: inwardNormal(s))
+            }
+        }
+        // Área del suelo: fórmula del polígono con las esquinas que da RoomPlan (en el plano local del suelo).
+        if let floor = room.floors.first, floor.polygonCorners.count >= 3 {
+            let c = floor.polygonCorners
+            var twice = SIMD3<Float>(repeating: 0)      // vale en cualquier plano: |Σ a×b| / 2
+            for i in c.indices { twice += simd_cross(c[i], c[(i + 1) % c.count]) }
+            model.floorArea = simd_length(twice) / 2
         }
 
         var counters: [FurnitureKind: Int] = [:]

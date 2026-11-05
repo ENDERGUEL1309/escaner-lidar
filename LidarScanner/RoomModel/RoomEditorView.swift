@@ -16,13 +16,88 @@ final class RoomEditorModel {
     var isVerifying = false
     var exportedFiles: [URL] = []
     var exportError: String?
+    /// Mueble que se está escaneando en detalle con Object Capture.
+    var detailTarget: ParametricFurniture?
+    var isFitting = false
+    var detailMessage: String?
     private(set) var revision = 0
 
     @ObservationIgnored let keyframes: [Keyframe]
+    /// Carpeta de la habitación: habitacion.json se guarda solo y los objetos detallados van en objetos/.
+    @ObservationIgnored let folder: URL
+    @ObservationIgnored let builder: RoomSceneBuilder
 
-    init(room: RoomModel, keyframes: [Keyframe]) {
+    init(room: RoomModel, keyframes: [Keyframe], folder: URL? = nil) {
         self.room = room
         self.keyframes = keyframes
+        let folder = folder ?? (try? ScanStorage.newScanFolder(prefix: "Habitacion"))
+            ?? FileManager.default.temporaryDirectory
+        self.folder = folder
+        builder = RoomSceneBuilder(folder: folder)
+        save()
+    }
+
+    static func jsonURL(in folder: URL) -> URL { folder.appendingPathComponent("habitacion.json") }
+
+    /// Habitación guardada antes (desde «Mis escaneos»). Sin fotos de la captura: no se puede volver a verificar.
+    static func load(folder: URL) -> RoomEditorModel? {
+        guard let data = try? Data(contentsOf: jsonURL(in: folder)),
+              let room = try? JSONDecoder().decode(RoomModel.self, from: data) else { return nil }
+        return RoomEditorModel(room: room, keyframes: [], folder: folder)
+    }
+
+    func save() {
+        try? ModelExporter.writeJSON(room, to: Self.jsonURL(in: folder))
+    }
+
+    private func changed() {
+        revision += 1
+        save()
+    }
+
+    var detailedCount: Int { room.furniture.filter { $0.detail != nil }.count }
+
+    func detailFolder(for f: ParametricFurniture) -> URL {
+        folder.appendingPathComponent("objetos/\(f.id.uuidString)", isDirectory: true)
+    }
+
+    /// Coloca el modelo de Object Capture en el mueble: toma sus medidas reales y lo vuelve a pegar a su pared.
+    func attachDetail(modelURL: URL, to id: UUID) async {
+        detailTarget = nil
+        guard let original = room.furniture.first(where: { $0.id == id }) else { return }
+        isFitting = true
+        defer { isFitting = false }
+        let file = "objetos/\(id.uuidString)/\(modelURL.lastPathComponent)"
+        builder.forget(file)
+        do {
+            let detail = try await Task.detached(priority: .userInitiated) {
+                try DetailFitter.fit(modelURL: modelURL, file: file, furniture: original)
+            }.value
+            guard let i = room.furniture.firstIndex(where: { $0.id == id }) else { return }
+            var f = room.furniture[i]
+            f.detail = detail
+            f.size = detail.measured
+            f.rebuildParts()
+            f = room.snappedToWall(f)
+            room.furniture[i] = f
+            selectedID = id
+            let cm = { (v: SIMD3<Float>) in "\(Int((v.x * 100).rounded())) × \(Int((v.y * 100).rounded())) × \(Int((v.z * 100).rounded())) cm" }
+            detailMessage = "\(f.name): \(cm(detail.measured)) medido en detalle (RoomPlan decía \(cm(detail.roomPlanSize)))."
+            changed()
+        } catch {
+            detailMessage = error.localizedDescription
+        }
+    }
+
+    func removeDetail() {
+        guard let f = selected, f.detail != nil else { return }
+        try? FileManager.default.removeItem(at: detailFolder(for: f))
+        edit { g in
+            if let d = g.detail { g.size = d.roomPlanSize }
+            g.detail = nil
+            g.rebuildParts()
+        }
+        save()
     }
 
     var selected: ParametricFurniture? { room.furniture.first { $0.id == selectedID } }
@@ -59,12 +134,14 @@ final class RoomEditorModel {
     /// Al soltar: si quedó junto a una pared, se alinea y se pega a ella.
     func snapSelected() {
         edit { f in f = room.snappedToWall(f) }
+        save()
     }
 
     func deleteSelected() {
+        if let f = selected { try? FileManager.default.removeItem(at: detailFolder(for: f)) }
         room.furniture.removeAll { $0.id == selectedID }
         selectedID = nil
-        revision += 1
+        changed()
     }
 
     func addMeasurePoint(_ point: SIMD3<Float>) {
@@ -94,23 +171,26 @@ final class RoomEditorModel {
         let results = await Task.detached(priority: .userInitiated) { () -> [ParametricFurniture] in
             let masks = keyframes.map { InstanceSignatures.instanceMask(for: $0.image) }
             let metal = MetalFusion()
-            return furniture.map { room.keepInside(FourTestVerifier.verify($0, keyframes: keyframes, masks: masks, metal: metal)) }
+            return furniture.map { f in
+                f.detail != nil ? f : room.keepInside(FourTestVerifier.verify(f, keyframes: keyframes, masks: masks, metal: metal))
+            }
         }.value
-        self.room.furniture = results
-        revision += 1
+        // Durante la verificación se pudo escanear un mueble en detalle: ese no se pisa.
+        self.room.furniture = results.map { r in self.room.furniture.first { $0.id == r.id && $0.detail != nil } ?? r }
+        changed()
     }
 
     func export() {
         do {
-            let folder = try ScanStorage.newScanFolder(prefix: "Habitacion")
-            let json = folder.appendingPathComponent("habitacion.json")
+            let json = Self.jsonURL(in: folder)
             try ModelExporter.writeJSON(room, to: json)
             let parts = RoomMesh.parts(of: room)
-            let obj = folder.appendingPathComponent("habitacion.obj")
+            let obj = folder.appendingPathComponent("habitacion_cajas.obj")
             try ModelExporter.writeOBJ(parts: parts, to: obj)
+            // La escena completa, con la malla real de cada mueble escaneado en detalle.
             let usdz = folder.appendingPathComponent("habitacion.usdz")
-            try ModelExporter.writeUSDZ(parts: parts, to: usdz)
-            exportedFiles = [json, obj, usdz]
+            try builder.writeUSDZ(room, to: usdz)
+            exportedFiles = [usdz, obj, json]
             exportError = nil
         } catch {
             exportError = error.localizedDescription
@@ -300,31 +380,8 @@ private struct RoomSceneView: UIViewRepresentable {
             builtRevision = model.revision
             content.childNodes.forEach { $0.removeFromParentNode() }
 
-            for wall in model.room.walls {
-                let box = SCNBox(width: CGFloat(wall.width), height: CGFloat(wall.height), length: 0.04, chamferRadius: 0)
-                box.firstMaterial?.diffuse.contents = UIColor(white: 0.85, alpha: 0.35)
-                box.firstMaterial?.isDoubleSided = true
-                let node = SCNNode(geometry: box)
-                node.simdPosition = wall.center - wall.normal * 0.02
-                node.simdEulerAngles = SIMD3(0, atan2(wall.normal.x, wall.normal.z), 0)
+            for node in model.builder.nodes(for: model.room, selectedID: model.selectedID, labels: true) {
                 content.addChildNode(node)
-            }
-
-            for furniture in model.room.furniture {
-                let group = SCNNode()
-                group.name = furniture.id.uuidString
-                group.simdTransform = furniture.localToWorld
-                let color = Self.color(for: furniture.state)
-                for part in furniture.parts {
-                    let box = SCNBox(width: CGFloat(part.size.x), height: CGFloat(part.size.y), length: CGFloat(part.size.z),
-                                     chamferRadius: 0.003)
-                    box.firstMaterial?.diffuse.contents = color
-                    box.firstMaterial?.emission.contents = furniture.id == model.selectedID ? UIColor(white: 0.25, alpha: 1) : UIColor.black
-                    let node = SCNNode(geometry: box)
-                    node.simdPosition = part.center
-                    group.addChildNode(node)
-                }
-                content.addChildNode(group)
             }
 
             if let a = model.measureA {
@@ -348,14 +405,6 @@ private struct RoomSceneView: UIViewRepresentable {
             let node = SCNNode(geometry: sphere)
             node.simdPosition = point
             return node
-        }
-
-        private static func color(for state: VerificationState) -> UIColor {
-            switch state {
-            case .red: UIColor.systemRed
-            case .yellow: UIColor.systemYellow
-            case .green: UIColor.systemGreen
-            }
         }
 
         func placeCamera() {
@@ -422,6 +471,26 @@ struct RoomEditorView: View {
             .background(Color(.secondarySystemBackground))
         }
         .task { if !model.keyframes.isEmpty { await model.verifyAll() } }
+        .overlay {
+            if model.isFitting {
+                ProgressView("Colocando el objeto…")
+                    .padding()
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .fullScreenCover(item: $model.detailTarget) { f in
+            NavigationStack {
+                ObjectScanView(destination: model.detailFolder(for: f)) { url in
+                    Task { await model.attachDetail(modelURL: url, to: f.id) }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancelar") { model.detailTarget = nil }
+                    }
+                }
+                .navigationTitle(f.name)
+            }
+        }
     }
 
     @ViewBuilder private var measureBanner: some View {
@@ -450,11 +519,18 @@ struct RoomEditorView: View {
     private var summary: some View {
         let count = { (state: VerificationState) in model.room.furniture.filter { $0.state == state }.count }
         return VStack(alignment: .leading, spacing: 4) {
-            Text("\(model.room.furniture.count) muebles · \(model.room.walls.count) paredes").font(.headline)
-            Text("Verdes \(count(.green)) · Amarillos \(count(.yellow)) · Rojos \(count(.red)). Toca un mueble para editarlo.")
+            Text("\(model.room.furniture.count) muebles · \(model.room.walls.count) paredes · \(model.room.openings.count) puertas y ventanas")
+                .font(.headline)
+            if let area = model.room.floorArea {
+                Text("Suelo: \(area, specifier: "%.2f") m²").font(.caption.monospacedDigit())
+            }
+            Text("En detalle \(model.detailedCount) · Verdes \(count(.green)) · Amarillos \(count(.yellow)) · Rojos \(count(.red)). Toca un mueble y pulsa «Escanear en detalle» para cambiar su caja por el objeto real.")
                 .font(.caption).foregroundStyle(.secondary)
+            if let message = model.detailMessage {
+                Text(message).font(.caption).foregroundStyle(.cyan)
+            }
             if model.keyframes.isEmpty {
-                Text("Sin fotos de esta captura: no se puede verificar.").font(.caption).foregroundStyle(.orange)
+                Text("Sin fotos de esta captura: las cajas no se pueden verificar.").font(.caption).foregroundStyle(.orange)
             }
         }
     }
@@ -463,9 +539,17 @@ struct RoomEditorView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(f.name).font(.headline)
-                Text(f.state.title).font(.caption.bold())
-                    .foregroundStyle(f.state == .green ? .green : f.state == .yellow ? .yellow : .red)
+                if f.detail != nil {
+                    Text("Escaneado en detalle").font(.caption.bold()).foregroundStyle(.cyan)
+                } else {
+                    Text(f.state.title).font(.caption.bold())
+                        .foregroundStyle(f.state == .green ? .green : f.state == .yellow ? .yellow : .red)
+                }
                 Spacer()
+                if f.detail != nil {
+                    // El giro del objeto dentro de su caja se adivina por la forma: si quedó al revés, se corrige aquí.
+                    Button { model.rotate(by: .pi / 2); model.snapSelected() } label: { Image(systemName: "rotate.3d") }
+                }
                 Button { model.rotate(by: -.pi / 12); model.snapSelected() } label: { Image(systemName: "rotate.left") }
                 Button { model.rotate(by: .pi / 12); model.snapSelected() } label: { Image(systemName: "rotate.right") }
                 Button(role: .destructive) { model.deleteSelected() } label: { Image(systemName: "trash") }
@@ -473,9 +557,22 @@ struct RoomEditorView: View {
             .buttonStyle(.bordered)
             Text("\(f.parts.count) piezas · \(f.size.x * 100, specifier: "%.0f") × \(f.size.y * 100, specifier: "%.0f") × \(f.size.z * 100, specifier: "%.0f") cm")
                 .font(.caption.monospacedDigit())
-            Text(reportText(f))
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
+            if f.detail == nil {
+                Text(reportText(f))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button { model.detailTarget = f } label: {
+                    Label(f.detail == nil ? "Escanear en detalle" : "Repetir escaneo", systemImage: "cube.transparent")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!ObjectScanModel.isSupported)
+                if f.detail != nil {
+                    Button("Volver a la caja", role: .destructive) { model.removeDetail() }
+                        .buttonStyle(.bordered)
+                }
+            }
         }
     }
 }

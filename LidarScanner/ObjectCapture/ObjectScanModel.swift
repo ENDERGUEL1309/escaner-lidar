@@ -23,17 +23,30 @@ final class ObjectScanModel {
     var isAreaMode = false
 
     @ObservationIgnored private var folder: URL?
+    /// Carpeta fija (p. ej. la de un mueble dentro de su habitación). Sin ella se crea un escaneo nuevo.
+    @ObservationIgnored private let destination: URL?
     @ObservationIgnored private var stateTask: Task<Void, Never>?
     @ObservationIgnored private var reconstructionTask: Task<Void, Never>?
 
     static var isSupported: Bool { ObjectCaptureSession.isSupported }
+
+    init(destination: URL? = nil) {
+        self.destination = destination
+    }
 
     private var imagesFolder: URL? { folder?.appendingPathComponent("Fotos", isDirectory: true) }
     private var checkpointFolder: URL? { folder?.appendingPathComponent("Checkpoints", isDirectory: true) }
 
     func start() {
         do {
-            let folder = try ScanStorage.newScanFolder(prefix: "Objeto")
+            let folder: URL
+            if let destination {
+                try? FileManager.default.removeItem(at: destination)     // repetir un mueble empieza de cero
+                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                folder = destination
+            } else {
+                folder = try ScanStorage.newScanFolder(prefix: "Objeto")
+            }
             self.folder = folder
             let images = folder.appendingPathComponent("Fotos", isDirectory: true)
             let checkpoints = folder.appendingPathComponent("Checkpoints", isDirectory: true)
@@ -108,7 +121,11 @@ final class ObjectScanModel {
                     case .requestProgress(_, let fraction):
                         self.phase = .reconstructing(fraction)
                     case .requestComplete(_, let result):
-                        if case .modelFile(let url) = result { self.phase = .done(url) }
+                        if case .modelFile(let url) = result {
+                            // Los puntos de control solo sirven para reanudar: ocupan cientos de MB.
+                            try? FileManager.default.removeItem(at: checkpoints)
+                            self.phase = .done(url)
+                        }
                     case .requestError(_, let error):
                         self.phase = .failed(error.localizedDescription)
                     case .processingCancelled:

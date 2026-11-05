@@ -136,6 +136,25 @@ struct ExportedFilesView: View {
     }
 }
 
+/// Abre una habitación guardada en el editor, para seguir escaneando muebles en detalle.
+private struct SavedRoomView: View {
+    let folder: URL
+    @State private var model: RoomEditorModel?
+
+    var body: some View {
+        Group {
+            if let model {
+                RoomEditorView(model: model)
+            } else {
+                ProgressView()
+            }
+        }
+        .navigationTitle("Habitación")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if model == nil { model = RoomEditorModel.load(folder: folder) } }
+    }
+}
+
 struct ScansListView: View {
     @State private var folders: [URL] = []
 
@@ -143,9 +162,13 @@ struct ScansListView: View {
         List {
             ForEach(folders, id: \.self) { folder in
                 NavigationLink {
-                    ExportedFilesView(title: folder.lastPathComponent,
-                                      files: ScanStorage.files(in: folder),
-                                      objects: ScanStorage.sceneObjects(in: folder))
+                    if FileManager.default.fileExists(atPath: RoomEditorModel.jsonURL(in: folder).path) {
+                        SavedRoomView(folder: folder)
+                    } else {
+                        ExportedFilesView(title: folder.lastPathComponent,
+                                          files: ScanStorage.files(in: folder),
+                                          objects: ScanStorage.sceneObjects(in: folder))
+                    }
                 } label: {
                     Label(folder.lastPathComponent.replacingOccurrences(of: "_", with: " "),
                           systemImage: folder.lastPathComponent.hasPrefix("Objeto") ? "cube.fill" : "house.fill")

@@ -2,7 +2,14 @@ import SwiftUI
 import RealityKit
 
 struct ObjectScanView: View {
-    @State private var model = ObjectScanModel()
+    @State private var model: ObjectScanModel
+    /// Si se da, el modelo terminado se entrega aquí (p. ej. para colocarlo en su habitación) en vez de listarlo.
+    private let onFinished: ((URL) -> Void)?
+
+    init(destination: URL? = nil, onFinished: ((URL) -> Void)? = nil) {
+        _model = State(initialValue: ObjectScanModel(destination: destination))
+        self.onFinished = onFinished
+    }
 
     var body: some View {
         ZStack {
@@ -34,7 +41,12 @@ struct ObjectScanView: View {
                 .padding()
 
             case .done(let url):
-                ExportedFilesView(title: "Modelo listo", files: [url])
+                if let onFinished {
+                    ProgressView("Colocando el objeto en la habitación…")
+                        .task { onFinished(url) }
+                } else {
+                    ExportedFilesView(title: "Modelo listo", files: [url])
+                }
 
             case .failed(let message):
                 ContentUnavailableView("No se pudo completar",

@@ -24,7 +24,7 @@ struct ContentView: View {
                         RoomScanView()
                     } label: {
                         ModeCard(title: "Modelar habitación",
-                                 subtitle: "RoomPlan + 4 pruebas: muebles por piezas, editables en pantalla (mover, girar, borrar, medir) y exportables.",
+                                 subtitle: "Camina y se van modelando paredes, puertas, ventanas y muebles con sus medidas. Después escanea cada mueble en detalle y queda en su sitio.",
                                  systemImage: "square.split.bottomrightquarter.fill",
                                  tint: .mint,
                                  available: RoomScanView.isSupported)

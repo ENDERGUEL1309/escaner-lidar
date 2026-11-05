@@ -73,6 +73,8 @@ struct ParametricFurniture: Codable, Identifiable {
     var parts: [FurniturePart] = []
     var state: VerificationState = .red
     var report = VerificationReport()
+    /// Modelo real escaneado en detalle con Object Capture. Sustituye a las cajas al dibujar y exportar.
+    var detail: DetailModel?
 
     init(name: String, kind: FurnitureKind, position: SIMD3<Float>, yaw: Float, size: SIMD3<Float>) {
         self.name = name
@@ -161,6 +163,58 @@ enum FurnitureBuilder {
     }
 }
 
+/// Malla fotogramétrica de un mueble, colocada dentro de su caja de RoomPlan.
+struct DetailModel: Codable {
+    /// USDZ relativo a la carpeta de la habitación.
+    var file: String
+    /// Coordenadas del modelo → coordenadas del mueble (origen en el suelo, centro de la planta), por columnas.
+    var matrix: [Float]
+    /// Medidas reales del objeto escaneado: ancho, alto y fondo en metros.
+    var measured: SIMD3<Float>
+    /// Lo que medía la caja de RoomPlan, para comparar.
+    var roomPlanSize: SIMD3<Float>
+
+    var transform: simd_float4x4 {
+        get {
+            simd_float4x4(columns: (SIMD4(matrix[0], matrix[1], matrix[2], matrix[3]),
+                                    SIMD4(matrix[4], matrix[5], matrix[6], matrix[7]),
+                                    SIMD4(matrix[8], matrix[9], matrix[10], matrix[11]),
+                                    SIMD4(matrix[12], matrix[13], matrix[14], matrix[15])))
+        }
+        set {
+            let c = newValue.columns
+            matrix = [c.0, c.1, c.2, c.3].flatMap { [$0.x, $0.y, $0.z, $0.w] }
+        }
+    }
+
+    /// Gira el modelo dentro del mueble (cuando el mueble cambia de giro sin que el objeto se mueva en la sala).
+    mutating func rotate(by angle: Float) {
+        transform = simd_float4x4(simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))) * transform
+    }
+}
+
+enum OpeningKind: String, Codable {
+    case door, window, opening
+
+    var displayName: String {
+        switch self {
+        case .door: "Puerta"
+        case .window: "Ventana"
+        case .opening: "Hueco"
+        }
+    }
+}
+
+/// Puerta, ventana o hueco de RoomPlan: un rectángulo en el plano de su pared.
+struct RoomOpening: Codable, Identifiable {
+    var id = UUID()
+    var kind: OpeningKind
+    var center: SIMD3<Float>
+    var width: Float
+    var height: Float
+    var normal: SIMD3<Float>
+}
+
 struct RoomWall: Codable, Identifiable {
     var id = UUID()
     var center: SIMD3<Float>
@@ -178,7 +232,10 @@ struct RoomModel: Codable {
     var unidades = "metros"
     var floorY: Float = 0
     var walls: [RoomWall] = []
+    var openings: [RoomOpening] = []
     var furniture: [ParametricFurniture] = []
+    /// Área del suelo según el polígono de RoomPlan.
+    var floorArea: Float?
 
     private static func footprint(_ f: ParametricFurniture) -> [SIMD3<Float>] {
         let m = f.localToWorld
@@ -231,6 +288,8 @@ struct RoomModel: Codable {
         if best.swapped {
             f.size = SIMD3(f.size.z, f.size.y, f.size.x)
         }
+        // El objeto escaneado no se mueve en la sala: si el mueble cambia de giro, el modelo gira al revés dentro.
+        f.detail?.rotate(by: furniture.yaw - best.yaw)
         f.yaw = best.yaw
         f.position -= best.wall.normal * best.gap
         f.rebuildParts()
