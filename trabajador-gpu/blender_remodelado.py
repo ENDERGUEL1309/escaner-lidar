@@ -41,7 +41,10 @@ def material(nombre, rgb=None, rugosidad=0.85, por_vertice=False, transmision=0.
     p = next(n for n in nodos if n.type == "BSDF_PRINCIPLED")
     p.inputs["Roughness"].default_value = rugosidad
     if transmision:
-        p.inputs["Transmission Weight"].default_value = transmision
+        # Cristal: luz de día pálida y emisiva. Con transmisión real EEVEE (y la Vista rápida del iPhone) lo
+        # pintaba negro y parecía un hueco oscuro en la pared.
+        p.inputs["Emission Color"].default_value = (*lineal(rgb), 1)
+        p.inputs["Emission Strength"].default_value = transmision
     if por_vertice:
         attr = nodos.new("ShaderNodeVertexColor")
         m.node_tree.links.new(attr.outputs["Color"], p.inputs["Base Color"])
@@ -81,8 +84,31 @@ escena = bpy.context.scene
 escena.unit_settings.system = "METRIC"
 col_env = coleccion("Envolvente")
 paredes = {}
+def losa(nombre, poli, y, mat, col):
+    """Suelo o techo con la forma real de la habitación (contorno de RoomPlan), de GROSOR de espesor."""
+    malla = bpy.data.meshes.new(nombre)
+    bm = bmesh.new()
+    cara = bm.faces.new([bm.verts.new(b((x, y, z))) for x, z in poli])
+    ext = bmesh.ops.extrude_face_region(bm, geom=[cara])
+    hacia = -1 if nombre == "suelo" else 1
+    bmesh.ops.translate(bm, vec=Vector((0, 0, hacia * GROSOR)),
+                        verts=[e for e in ext["geom"] if isinstance(e, bmesh.types.BMVert)])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(malla)
+    bm.free()
+    o = bpy.data.objects.new(nombre, malla)
+    o.data.materials.append(mat)
+    col.objects.link(o)
+    return o
+
+
+poli = env.get("contorno_xz")
 for nombre, pl in env["planos"].items():
     c, u, v, n = b(pl["centro"]), b(pl["u"]), b(pl["v"]), b(pl["normal"])
+    if poli and nombre in ("suelo", "techo"):
+        losa(nombre, poli, env["suelo_y"] if nombre == "suelo" else env["techo_y"],
+             material(f"Mat_{nombre}", pl["color"], 0.55 if nombre == "suelo" else 0.9), col_env)
+        continue
     extra = 2 * GROSOR if nombre in ("suelo", "techo") else 0
     rug = 0.55 if nombre == "suelo" else 0.9
     o = caja(nombre, base(u, v, n, c - n * GROSOR / 2), (pl["ancho_m"] + extra, pl["alto_m"] + extra, GROSOR),
@@ -176,9 +202,15 @@ escena.world = mundo
 
 cam = bpy.data.objects.new("Vista", bpy.data.cameras.new("Vista"))
 cam.data.lens = 14
-p1, p3 = b(env["planos"]["pared_1"]["centro"]), b(env["planos"]["pared_3"]["centro"])
-# Esquina alta: desde casi el techo se ve toda la habitación por encima de los muebles.
-ojo = centro + (p1 - centro) * 0.92 + (p3 - centro) * 0.92
+# Esquina alta: desde casi el techo se ve toda la habitación por encima de los muebles (la esquina del contorno,
+# o del rectángulo del suelo, más lejana del centro).
+if poli:
+    esquinas = [b((x, suelo["centro"][1], z)) for x, z in poli]
+else:
+    su, sv = b(suelo["u"]) * suelo["ancho_m"] / 2, b(suelo["v"]) * suelo["alto_m"] / 2
+    esquinas = [b(suelo["centro"]) + su + sv, b(suelo["centro"]) - su - sv]
+esquina = max(esquinas, key=lambda p: (p.xy - centro.xy).length)
+ojo = centro + (esquina - centro) * 0.85
 ojo.z = b(techo["centro"]).z - 0.25
 mira = centro.copy()
 mira.z = b(suelo["centro"]).z + 0.6

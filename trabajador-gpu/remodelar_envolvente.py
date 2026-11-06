@@ -141,6 +141,68 @@ def caja(p: dict) -> list[dict]:
     ]
 
 
+def contorno(paredes: list[dict]) -> list[list[float]] | None:
+    """Polígono del suelo (x, z) encadenando los extremos de las paredes de RoomPlan; None si no cierra."""
+    tramos = [(np.array(w["a"]), np.array(w["b"])) for w in paredes]
+    a, b = tramos.pop(0)
+    poli, actual = [a], b
+    while tramos:
+        dist = [min(np.linalg.norm(p - actual), np.linalg.norm(q - actual)) for p, q in tramos]
+        i = int(np.argmin(dist))
+        if dist[i] > 0.35:
+            return None
+        p, q = tramos.pop(i)
+        if np.linalg.norm(q - actual) < np.linalg.norm(p - actual):
+            p, q = q, p
+        poli.append((p + actual) / 2)
+        actual = q
+    if np.linalg.norm(actual - poli[0]) > 0.35:
+        return None
+    poli[0] = (poli[0] + actual) / 2
+    return [[round(float(x), 4), round(float(z), 4)] for x, z in poli]
+
+
+def planos_roomplan(origen: Path, registro=print):
+    """Envolvente con las paredes que midió RoomPlan en el iPhone (centro, normal hacia dentro, ancho y alto exactos).
+    Es la medida más fiable: no depende de la malla del PC, que en una sala abierta o con escaleras confunde planos."""
+    ruta = origen / "habitacion.json"
+    if not ruta.exists():
+        return None
+    sala = json.loads(ruta.read_text("utf-8"))
+    walls = [w for w in sala.get("walls", []) if w.get("width", 0) > 0.05]
+    if len(walls) < 3:
+        return None
+    up = np.array([0.0, 1.0, 0.0])
+    suelo = float(sala.get("floorY", min(w["center"][1] - w["height"] / 2 for w in walls)))
+    techo = float(np.median([w["center"][1] + w["height"] / 2 for w in walls]))
+    paredes, extremos = [], []
+    for i, w in enumerate(sorted(walls, key=lambda w: -w["width"])):
+        n = np.array(w["normal"], float)
+        n[1] = 0
+        n /= np.linalg.norm(n)
+        u = np.cross(up, n)
+        c = np.array(w["center"], float)
+        paredes.append({"nombre": f"pared_{i + 1}", "centro": c, "u": u, "v": up, "ancho": float(w["width"]),
+                        "alto": float(w["height"]), "n": n})
+        a_, b_ = c - u * w["width"] / 2, c + u * w["width"] / 2
+        extremos.append({"a": [a_[0], a_[2]], "b": [b_[0], b_[2]]})
+    # Suelo y techo: rectángulo orientado como la pared más larga que abarca todas las paredes.
+    e0 = paredes[0]["u"]
+    e1 = np.cross(e0, up)
+    pts = np.array([p["a"] for p in extremos] + [p["b"] for p in extremos])
+    p3 = np.stack([pts[:, 0], np.zeros(len(pts)), pts[:, 1]], 1)
+    s0, s1 = p3 @ e0, p3 @ e1
+    m0, m1 = (s0.min() + s0.max()) / 2, (s1.min() + s1.max()) / 2
+    largo, ancho = float(s0.max() - s0.min()), float(s1.max() - s1.min())
+    cen = lambda y: e0 * m0 + e1 * m1 + up * y  # noqa: E731
+    rects = [{"nombre": "suelo", "centro": cen(suelo), "u": e0, "v": e1, "ancho": largo, "alto": ancho, "n": up},
+             {"nombre": "techo", "centro": cen(techo), "u": e0, "v": -e1, "ancho": largo, "alto": ancho, "n": -up}]
+    poli = contorno(extremos)
+    registro(f"RoomPlan: {len(walls)} paredes, suelo y = {suelo:.3f} m, techo y = {techo:.3f} m, "
+             f"{'contorno cerrado' if poli else 'sin contorno cerrado (suelo rectangular)'}")
+    return {"suelo": suelo, "techo": techo, "giro": math.atan2(e0[2], e0[0])}, rects + paredes, poli
+
+
 # ----------------------------------------------------------------------------------------------- textura
 
 def cargar_fotos(origen: Path, dev):
@@ -285,10 +347,15 @@ def main():
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # La malla refinada del PC es lisa; la del LiDAR sale en escalones de vóxel y sus normales engañan.
-    lisa = origen / "splat2d" / "malla_2dgs_plana.ply"
-    v, f = leer_malla(lisa if lisa.exists() else origen / "malla_color.ply")
-    pl = planos(v, f)
-    rects = caja(pl)
+    # Con RoomPlan (habitacion.json) las paredes vienen medidas del iPhone; si no, se buscan en la malla.
+    roomplan = planos_roomplan(origen)
+    if roomplan:
+        pl, rects, poli = roomplan
+    else:
+        lisa = origen / "splat2d" / "malla_2dgs_plana.ply"
+        v, f = leer_malla(lisa if lisa.exists() else origen / "malla_color.ply")
+        pl, poli = planos(v, f), None
+        rects = caja(pl)
     fotos = cargar_fotos(origen, dev)
     gan = ganancias(fotos)
     print(f"{len(fotos)} fotos con LiDAR", flush=True)
@@ -306,7 +373,8 @@ def main():
     resumen = {"unidades": "metros, mundo de ARKit (Y arriba)",
                "largo_m": round(rects[0]["ancho"], 3), "ancho_m": round(rects[0]["alto"], 3),
                "alto_m": round(pl["techo"] - pl["suelo"], 3), "suelo_y": round(pl["suelo"], 4),
-               "techo_y": round(pl["techo"], 4), "giro_grados": round(math.degrees(pl["giro"]), 2), "planos": medidas}
+               "techo_y": round(pl["techo"], 4), "giro_grados": round(math.degrees(pl["giro"]), 2),
+               "fuente": "RoomPlan" if roomplan else "malla", "contorno_xz": poli, "planos": medidas}
     (destino / "envolvente.json").write_text(json.dumps(resumen, indent=1, ensure_ascii=False), "utf-8")
     print(f"Envolvente: {resumen['largo_m']} × {resumen['ancho_m']} × {resumen['alto_m']} m → {destino}", flush=True)
 

@@ -313,7 +313,10 @@ def main():
     registro(f"Profundidad densa en {densas} de {len(vistas)} vistas")
 
     centros = np.array([np.linalg.inv(v["w2c"])[:3, 3] for v in vistas])
-    escena = float(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max())
+    # Escala de la escena: lo que abarcan las cámaras o, si se grabó girando desde el centro (cámaras a pocos cm),
+    # lo que abarca la habitación medida por el LiDAR. Con solo las cámaras salía 0,3 m y todo lo más lejano se perdía.
+    escena = float(max(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max(),
+                       np.percentile(np.linalg.norm(lidar_xyz[::50] - centros.mean(0), axis=1), 90), 1.0))
 
     if not a.solo_malla:
         # Inicialización: puntos de COLMAP (detalle donde hay textura) + malla LiDAR (paredes lisas). Sin la nube
@@ -466,7 +469,7 @@ def extraer_malla(destino: Path, vistas, escena: float, voxel: float, registro, 
             near_plane=0.05, far_plane=20.0)
         rgb = render[0, ..., :3].clamp(0, 1)
         prof = mediana[0, ..., 0].clone()
-        prof[(alfa[0, ..., 0] < 0.5) | (prof > min(6.0, 2 * escena))] = 0
+        prof[(alfa[0, ..., 0] < 0.5) | (prof > 6.0)] = 0
         K = torch.from_numpy(v["K"]).to(dev)
         M = torch.from_numpy(v["w2c"]).to(dev)
         # Por planos en z para no agotar memoria.

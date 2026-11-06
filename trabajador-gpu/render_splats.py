@@ -81,7 +81,10 @@ def main():
     Ks = torch.from_numpy(np.stack([v["K"] for v in vistas])).to(dev)
     w2cs = torch.from_numpy(np.stack([v["w2c"] for v in vistas])).to(dev)
     centros = np.array([np.linalg.inv(v["w2c"])[:3, 3] for v in vistas])
-    escena = float(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max())
+    # Escala de la escena: lo que abarcan las cámaras o, si se grabó girando desde el centro (cámaras a pocos cm),
+    # lo que abarca la habitación medida por el LiDAR. Con solo las cámaras salía 0,3 m y todo lo más lejano se perdía.
+    escena = float(max(1.1 * np.linalg.norm(centros - centros.mean(0), axis=1).max(),
+                       np.percentile(np.linalg.norm(lidar_xyz[::50] - centros.mean(0), axis=1), 90), 1.0))
 
     # Inicio: nube densa de COLMAP (detalle donde hay textura) + malla LiDAR (paredes lisas), como splat2d_local.
     from escaner_ia.fotogrametria import nube_inicial
