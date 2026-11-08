@@ -64,6 +64,7 @@ def malla_movil(entrada: Path, salida: Path, triangulos: int, registro):
 
 
 HUNYUAN_PY = HERRAMIENTAS / "Hunyuan3D-2" / ".venv" / "Scripts" / "python.exe"
+SAM3_PY = HERRAMIENTAS / "SAM3" / ".venv" / "Scripts" / "python.exe"
 
 
 def remodelar(origen: Path, registro):
@@ -75,6 +76,16 @@ def remodelar(origen: Path, registro):
     if (destino / "habitacion_remodelada.blend").exists():
         registro("8/8 Remodelado: ya hecho")
         return
+    # Qué es cada punto (pared, suelo, sofá…): SAM3 en cada foto y votación entre vistas. Opcional: sin ella los
+    # muebles se separan solo con su caja de RoomPlan y las paredes con la profundidad.
+    if SAM3_PY.exists() and not (origen / "segmentacion" / "etiquetas_lidar.npz").exists():
+        try:
+            registro("8/8 Remodelado: segmentando las fotos con SAM3…")
+            ejecutar([str(SAM3_PY), str(AQUI / "segmentar_fotos.py"), str(origen)], registro)
+            registro("8/8 Remodelado: votando la etiqueta de cada punto entre vistas…")
+            ejecutar([sys.executable, str(AQUI / "votar_etiquetas.py"), str(origen)], registro)
+        except RuntimeError as error:
+            registro(f"    sin segmentación: {str(error).splitlines()[-1]}")
     registro("8/8 Remodelado: paredes, suelo y techo exactos…")
     ejecutar([sys.executable, str(AQUI / "remodelar_envolvente.py"), str(origen)], registro)
     registro("8/8 Remodelado: muebles y su mejor foto…")

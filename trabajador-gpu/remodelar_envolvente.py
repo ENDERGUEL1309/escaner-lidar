@@ -230,7 +230,26 @@ def cargar_fotos(origen: Path, dev):
                 "Kp": (prof.fx, prof.fy, prof.cx, prof.cy),
                 "w2c": torch.from_numpy(arkit_a_opencv(matriz_columnas(f["cameraToWorld"]))).to(dev).float(),
             })
+            # Segmentación de SAM3 (segmentar_fotos.py), al tamaño de la foto cargada.
+            seg = origen / "segmentacion" / sub / (Path(f["archivo"]).stem + ".png")
+            if seg.exists():
+                la = np.asarray(Image.open(seg).convert("LA").resize(img.size, Image.NEAREST))
+                fotos[-1]["etiquetas"] = torch.from_numpy(la[..., 0].copy()).to(dev)
+                fotos[-1]["confianza"] = torch.from_numpy(la[..., 1].copy()).to(dev).float() / 255
     return fotos
+
+
+def clases_segmentacion(origen: Path) -> dict[str, set[int]]:
+    """Etiquetas de SAM3 agrupadas: superficies de la envolvente y el resto (objetos). Vacío si no hay segmentación."""
+    ruta = origen / "segmentacion" / "clases.json"
+    if not ruta.exists():
+        return {}
+    clases = json.loads(ruta.read_text("utf-8"))
+    por_concepto = {c["concepto"]: c["etiqueta"] for c in clases}
+    grupo = lambda *cs: {por_concepto[c] for c in cs if c in por_concepto}  # noqa: E731
+    return {"pared": grupo("wall", "window", "door", "picture frame"), "suelo": grupo("floor", "rug"),
+            "techo": grupo("ceiling", "lamp"),
+            "objeto": {c["etiqueta"] for c in clases if not c["superficie"]}}
 
 
 def ganancias(fotos) -> list[torch.Tensor]:
@@ -258,7 +277,7 @@ def rellenar(color: torch.Tensor, peso: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def textura(r: dict, fotos, gan, mm_px: float, dev, top: int = 3):
+def textura(r: dict, fotos, gan, mm_px: float, dev, top: int = 3, grupos: dict | None = None):
     W, H = max(8, round(r["ancho"] * 1000 / mm_px)), max(8, round(r["alto"] * 1000 / mm_px))
     s = (torch.arange(W, device=dev) + 0.5) / W - 0.5
     t = 0.5 - (torch.arange(H, device=dev) + 0.5) / H
@@ -286,6 +305,15 @@ def textura(r: dict, fotos, gan, mm_px: float, dev, top: int = 3):
         pv = (cam[:, 1] / z.clamp(min=1e-3) * pfy + pcy).long().clamp(0, ph - 1)
         d = f["prof"][pv, pu]
         ok &= (d > 0) & ((d - z).abs() < 0.04 + 0.01 * z)
+        # Con la segmentación de SAM3: fuera lo que la foto ve como objeto (no como esta superficie). Atrapa lo que
+        # el LiDAR no separa: cables, cojines o cuadros pegados a la pared, a menos de 4 cm de ella.
+        if grupos and "etiquetas" in f:
+            propio = grupos.get(r["nombre"].split("_")[0], set())
+            et = f["etiquetas"][vv.long().clamp(0, h - 1), uu.long().clamp(0, w - 1)].long()
+            ajeno = torch.zeros_like(ok)
+            for k in grupos["objeto"] - propio:
+                ajeno |= et == k
+            ok &= ~ajeno
         # Puntuación: de frente y de cerca (el detalle por píxel cae con la distancia y con el ángulo).
         centro_cam = -R.T @ tt
         rayo = F.normalize(centro_cam - P, dim=1)
@@ -358,10 +386,14 @@ def main():
         rects = caja(pl)
     fotos = cargar_fotos(origen, dev)
     gan = ganancias(fotos)
+    grupos = clases_segmentacion(origen)
+    if grupos:
+        print(f"Segmentación SAM3 en {sum('etiquetas' in f for f in fotos)} fotos: se quitan los objetos de las texturas",
+              flush=True)
     print(f"{len(fotos)} fotos con LiDAR", flush=True)
     medidas = {}
     for r in rects:
-        img, cobertura, base = textura(r, fotos, gan, a.mm_px, dev)
+        img, cobertura, base = textura(r, fotos, gan, a.mm_px, dev, grupos=grupos)
         Image.fromarray(img).save(destino / f"{r['nombre']}.png", optimize=True)
         medidas[r["nombre"]] = {"ancho_m": round(r["ancho"], 3), "alto_m": round(r["alto"], 3),
                                 "visto_limpio": round(cobertura, 3), "color": base,

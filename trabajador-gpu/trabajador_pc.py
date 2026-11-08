@@ -78,6 +78,8 @@ class Progreso:
         (r"Versión ligera", 0.64, "Preparando la versión para el iPhone"),
         (r"Modelado verificado", 0.66, "Modelando los muebles y comprobándolos con las fotos"),
         (r"Render fotorrealista", 0.69, "Creando el render fotorrealista"),
+        (r"8/8 Remodelado: segmentando", 0.935, "Remodelando: reconociendo cada objeto en las fotos (SAM3)"),
+        (r"8/8 Remodelado: votando", 0.938, "Remodelando: etiquetando cada punto entre vistas"),
         (r"8/8 Remodelado: paredes", 0.94, "Remodelando: paredes, suelo y techo exactos"),
         (r"8/8 Remodelado: muebles", 0.95, "Remodelando: separando los muebles"),
         (r"8/8 Remodelado: generando", 0.955, "Remodelando: generando los muebles con Hunyuan3D-2"),

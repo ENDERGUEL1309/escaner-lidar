@@ -71,7 +71,7 @@ def separar(origen: Path, env: dict, registro=print):
 
 
 @torch.no_grad()
-def mejor_recorte(puntos_mundo: np.ndarray, fotos, destino: Path, nombre: str, dev):
+def mejor_recorte(puntos_mundo: np.ndarray, fotos, destino: Path, nombre: str, dev, etiquetas: set[int] = frozenset()):
     mundo = torch.from_numpy(puntos_mundo).float().to(dev)
     mejor = None
     for k, f in enumerate(fotos):
@@ -113,6 +113,13 @@ def mejor_recorte(puntos_mundo: np.ndarray, fotos, destino: Path, nombre: str, d
     mascara = -F.max_pool2d(-mascara, 2 * radio + 1, 1, radio)[0, 0]
     m = mascara.cpu().numpy() > 0.5
     m = ndimage.binary_fill_holes(m)
+    # Con SAM3: la silueta exacta es la máscara del mueble en esa foto, limitada a la zona de sus puntos LiDAR
+    # (ensanchada, porque la malla LiDAR es gruesa y no llega a los bordes finos: patas, brazos, cojines).
+    if etiquetas and "etiquetas" in f:
+        et = f["etiquetas"].cpu().numpy()
+        sam = np.isin(et, list(etiquetas)) & ndimage.binary_dilation(m, iterations=4 * radio)
+        if sam.sum() > 0.4 * m.sum():
+            m = ndimage.binary_fill_holes(ndimage.binary_opening(sam, iterations=2))
     x0, y0, x1, y1 = (int(v) for v in caja)
     pad = int(0.08 * max(x1 - x0, y1 - y0))
     x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
@@ -129,11 +136,28 @@ def mejor_recorte(puntos_mundo: np.ndarray, fotos, destino: Path, nombre: str, d
     return {"foto": k, "visible": round(frac, 3), "camara_mundo": centro_cam.tolist()}
 
 
+# Conceptos de SAM3 que cuentan como cada tipo de mueble de RoomPlan (un sofá lleva cojines; una mesa y un escritorio
+# se confunden entre sí; un mueble de almacenaje puede ser estantería o tener la tele encima).
+COMPATIBLES = {"sofa": {"sofa", "cushion"}, "chair": {"chair"}, "table": {"table", "desk"}, "desk": {"desk", "table"},
+               "bed": {"bed", "cushion"}, "storage": {"cabinet", "shelf", "television", "appliance"},
+               "appliance": {"appliance", "refrigerator", "television", "cabinet"}, "television": {"television"},
+               "refrigerator": {"refrigerator", "appliance"}}
+
+
+def etiquetas_de(origen: Path, kind: str) -> set[int]:
+    """Etiquetas de segmentacion/clases.json compatibles con un tipo de mueble de RoomPlan (vacío sin SAM3)."""
+    ruta = origen / "segmentacion" / "clases.json"
+    if not ruta.exists():
+        return set()
+    conceptos = COMPATIBLES.get(kind, {kind})
+    return {c["etiqueta"] for c in json.loads(ruta.read_text("utf-8")) if c["concepto"] in conceptos}
+
+
 TIPOS = {"table": "mesa", "desk": "escritorio", "bed": "cama", "sofa": "sofá", "chair": "silla",
          "storage": "armario", "appliance": "electrodoméstico"}
 
 
-def muebles_roomplan(origen: Path, v_mundo: np.ndarray) -> list[dict] | None:
+def muebles_roomplan(origen: Path, v_mundo: np.ndarray, etiqueta_v: np.ndarray | None = None) -> list[dict] | None:
     """Muebles de habitacion.json (RoomPlan): nombre, tipo y caja medida, en el mismo mundo de ARKit que las fotos.
     Los puntos LiDAR de cada uno son los que caen en su caja (con 5 cm de margen)."""
     ruta = origen / "habitacion.json"
@@ -148,8 +172,17 @@ def muebles_roomplan(origen: Path, v_mundo: np.ndarray) -> list[dict] | None:
         local = (v_mundo - pos) @ R                                 # mundo → mueble
         dentro = ((np.abs(local[:, 0]) < tam[0] / 2 + 0.05) & (np.abs(local[:, 2]) < tam[2] / 2 + 0.05)
                   & (local[:, 1] > 0.02) & (local[:, 1] < tam[1] + 0.05))
+        # Con la etiqueta de cada punto (votar_etiquetas.py): solo lo que es este mueble, en una caja algo mayor
+        # (la de RoomPlan a veces se queda corta) y sin el suelo, la pared o el mueble de al lado.
+        validas = etiquetas_de(origen, m["kind"])
+        if etiqueta_v is not None and validas:
+            amplia = ((np.abs(local[:, 0]) < tam[0] / 2 + 0.15) & (np.abs(local[:, 2]) < tam[2] / 2 + 0.15)
+                      & (local[:, 1] > 0.01) & (local[:, 1] < tam[1] + 0.15))
+            suyos = amplia & np.isin(etiqueta_v, list(validas))
+            if suyos.sum() >= 300:
+                dentro = suyos
         muebles.append({"nombre": m["name"], "tipo": TIPOS.get(m["kind"], m["kind"]), "id": m["id"],
-                        "posicion": pos, "yaw": yaw, "tam": tam, "puntos_mundo": v_mundo[dentro],
+                        "kind": m["kind"], "posicion": pos, "yaw": yaw, "tam": tam, "puntos_mundo": v_mundo[dentro],
                         "detalle": (m.get("detail") or {}).get("file"),
                         "matriz_detalle": (m.get("detail") or {}).get("matrix")})
     return muebles
@@ -182,7 +215,13 @@ def main():
     destino.mkdir(parents=True, exist_ok=True)
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     v, _ = leer_malla(origen / "malla_color.ply")
-    muebles = muebles_roomplan(origen, v)
+    seg = origen / "segmentacion" / "etiquetas_lidar.npz"
+    etiqueta_v = np.load(seg)["etiqueta"] if seg.exists() else None
+    if etiqueta_v is not None and len(etiqueta_v) != len(v):
+        etiqueta_v = None
+    muebles = muebles_roomplan(origen, v, etiqueta_v)
+    if etiqueta_v is not None:
+        print("Puntos de cada mueble según la segmentación SAM3 votada entre vistas", flush=True)
     fuente = "RoomPlan (habitacion.json)"
     if muebles is None:
         muebles, fuente = muebles_separados(origen, env), "separación automática de la malla LiDAR"
@@ -193,7 +232,8 @@ def main():
         clave = f"mueble_{i + 1}"
         recorte = None
         if len(m["puntos_mundo"]) >= 300 and not m["detalle"]:
-            recorte = mejor_recorte(m["puntos_mundo"], fotos, destino, clave, dev)
+            recorte = mejor_recorte(m["puntos_mundo"], fotos, destino, clave, dev,
+                                    etiquetas_de(origen, m.get("kind", "")))
         np.save(destino / f"{clave}_puntos.npy", m["puntos_mundo"].astype(np.float32))
         tam = m["tam"]
         salida.append({"clave": clave, "nombre": m["nombre"], "tipo": m["tipo"], "id": m["id"],
